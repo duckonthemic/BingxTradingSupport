@@ -1,0 +1,424 @@
+# ═══════════════════════════════════════════════════════════════════
+# 🔐 SENSITIVE DATA - NEVER COMMIT
+# ═══════════════════════════════════════════════════════════════════
+
+# Environment & Configuration
+.env
+.env.*
+*.env
+.envrc
+.flaskenv
+
+# API Keys & Credentials
+credentials.json
+service_account.json
+*.pem
+*.key
+*.p12
+*.pfx
+*.crt
+*.cer
+secrets/
+config/secrets/
+.secrets/
+
+# Google Cloud / Sheets API
+client_secret*.json
+token.json
+token.pickle
+oauth2.json
+service-account*.json
+
+# Telegram Bot Tokens
+*.token
+telegram_token.txt
+
+# BingX API Credentials
+api_key.txt
+secret_key.txt
+
+# ═══════════════════════════════════════════════════════════════════
+# 📝 LOGS & RUNTIME DATA
+# ═══════════════════════════════════════════════════════════════════
+
+# Log Files
+logs/
+*.log
+*.log.*
+*.log.gz
+*.log.bz2
+log/
+logging/
+
+# Runtime Data
+data/
+*.db
+*.sqlite
+*.sqlite3
+*.db-shm
+*.db-wal
+redis_data/
+backtest_results/
+
+# Charts & Temp Files
+charts/
+temp/
+tmp/
+cache/
+.cache/
+
+# ═══════════════════════════════════════════════════════════════════
+# 🐍 PYTHON
+# ═══════════════════════════════════════════════════════════════════
+
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyc
+*.pyo
+*.pyd
+
+# C extensions
+*.so
+
+# Distribution / packaging
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+pip-wheel-metadata/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# PyInstaller
+*.manifest
+*.spec
+
+# Unit test / coverage reports
+htmlcov/
+.tox/
+.nox/
+.coverage
+.coverage.*
+nosetests.xml
+coverage.xml
+*.cover
+*.py,cover
+.hypothesis/
+.pytest_cache/
+pytestdebug.log
+
+# Translations
+*.mo
+*.pot
+
+# Django stuff
+*.log
+local_settings.py
+db.sqlite3
+db.sqlite3-journal
+
+# Flask stuff
+instance/
+.webassets-cache
+
+# Scrapy stuff
+.scrapy
+
+# Sphinx documentation
+docs/_build/
+docs/.doctrees/
+
+# PyBuilder
+target/
+
+# Jupyter Notebook
+.ipynb_checkpoints
+*.ipynb
+!notebooks/**/*.ipynb
+
+# IPython
+profile_default/
+ipython_config.py
+
+# Virtual Environments
+.venv/
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+.Python
+.virtualenv
+
+# pyenv
+.python-version
+
+# pipenv
+Pipfile.lock
+
+# poetry
+poetry.lock
+
+# Celery stuff
+celerybeat-schedule
+celerybeat.pid
+
+# SageMath parsed files
+*.sage.py
+
+# Spyder project settings
+.spyderproject
+.spyproject
+
+# Rope project settings
+.ropeproject
+
+# mkdocs documentation
+/site
+
+# mypy
+.mypy_cache/
+.dmypy.json
+dmypy.json
+
+# Pyre type checker
+.pyre/
+
+# pytype static type analyzer
+.pytype/
+
+# ═══════════════════════════════════════════════════════════════════
+# 💻 IDE & EDITORS
+# ═══════════════════════════════════════════════════════════════════
+
+# VS Code
+.vscode/
+.vscode-test/
+*.code-workspace
+.history/
+
+# PyCharm / IntelliJ IDEA
+.idea/
+*.iml
+*.iws
+*.ipr
+.idea_modules/
+
+# Sublime Text
+*.sublime-project
+*.sublime-workspace
+*.sublime-settings
+
+# Vim / Neovim
+*.swp
+*.swo
+*.swn
+*~
+.vim/
+.nvim/
+
+# Emacs
+*~
+\#*\#
+.\#*
+.emacs.desktop
+.emacs.desktop.lock
+*.elc
+auto-save-list
+tramp
+.\#*
+
+# Eclipse
+.project
+.pydevproject
+.settings/
+.classpath
+.factorypath
+
+# NetBeans
+nbproject/
+nbbuild/
+nbdist/
+.nb-gradle/
+
+# Visual Studio
+.vs/
+*.suo
+*.user
+*.userosscache
+*.sln.docstates
+
+# ═══════════════════════════════════════════════════════════════════
+# 🖥️ OS SPECIFIC
+# ═══════════════════════════════════════════════════════════════════
+
+# macOS
+.DS_Store
+.DS_Store?
+._*
+.AppleDouble
+.LSOverride
+.Spotlight-V100
+.Trashes
+.AppleDB
+.AppleDesktop
+Network Trash Folder
+Temporary Items
+.apdisk
+
+# Windows
+Thumbs.db
+Thumbs.db:encryptable
+ehthumbs.db
+ehthumbs_vista.db
+*.stackdump
+[Dd]esktop.ini
+$RECYCLE.BIN/
+*.cab
+*.msi
+*.msix
+*.msm
+*.msp
+*.lnk
+
+# Linux
+.directory
+.Trash-*
+.nfs*
+
+# ═══════════════════════════════════════════════════════════════════
+# 🐳 DOCKER
+# ═══════════════════════════════════════════════════════════════════
+
+# Docker Compose overrides
+docker-compose.override.yml
+docker-compose.local.yml
+.docker/
+
+# Docker volumes
+.dockerignore
+*.dockerfile
+
+# ═══════════════════════════════════════════════════════════════════
+# 📦 NODE (if used for tooling)
+# ═══════════════════════════════════════════════════════════════════
+
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+package-lock.json
+yarn.lock
+.pnpm-debug.log*
+
+# ═══════════════════════════════════════════════════════════════════
+# 🔧 BUILD & DEPLOYMENT
+# ═══════════════════════════════════════════════════════════════════
+
+# Build outputs
+*.out
+*.app
+*.exe
+*.dll
+*.lib
+*.dylib
+
+# Backup files
+*.bak
+*.backup
+*.old
+*.orig
+*.save
+*.~
+~*
+
+# Compressed files (unless intentional)
+*.zip
+*.tar
+*.gz
+*.bz2
+*.7z
+*.rar
+
+# ═══════════════════════════════════════════════════════════════════
+# 📊 PROJECT SPECIFIC
+# ═══════════════════════════════════════════════════════════════════
+
+# Generated charts
+*.png
+*.jpg
+*.jpeg
+*.gif
+!assets/**/*.png
+!assets/**/*.jpg
+!docs/images/**/*.png
+
+# Backtest results
+backtest_results/
+backtests/
+backtest*.py
+backtest*.json
+backtest*.csv
+run_backtest*.py
+analyze_backtest.py
+test_*.py
+
+# User scripts (keep examples)
+run_*.py
+!run_backtest.py
+force_test_scan.py
+update_sheet_headers.py
+format_sheet.py
+
+# Format script output
+format_sheet_output.txt
+
+# Redis dump
+dump.rdb
+
+# Docs folder (internal docs only)
+docs/
+*.md
+!README.md
+!LICENSE
+
+# Generated outputs
+*.txt
+bot_logs*.txt
+charts/
+backtest_analysis_charts.png
+backtest_trades_detailed.csv
+ie_trade_backtest_*.json
+
+# ═══════════════════════════════════════════════════════════════════
+# 🎯 KEEP THESE FILES (Exceptions)
+# ═══════════════════════════════════════════════════════════════════
+
+# Keep example files
+!.env.example
+!config.example.json
+!credentials.example.json
+
+# Keep documentation
+!README.md
+!LICENSE
+!CHANGELOG.md
+!docs/README.md
+
+# Keep assets
+!assets/
+!docs/images/

@@ -1,0 +1,2 @@
+trade_no,date,time_vn,kill_zone,symbol,direction,daily_bias,signal_time,entry_alert,entry_actual,slippage_pct,sl_price,tp1_price,tp2_price,exit_price,exit_reason,rr_achieved,pnl_usd,notes
+1,2025-01-22,14:30,London,BTC-USDT,SHORT,S,14:30,105000,105050,0.05%,105800,104200,103500,,,,,"Template - Delete this row"

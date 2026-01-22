@@ -1,0 +1,71 @@
+version: '3.8'
+
+services:
+  bot:
+    build: .
+    container_name: bingx-zone-alert-bot
+    restart: unless-stopped
+    depends_on:
+      - redis
+    environment:
+      # Telegram config
+      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
+      - TELEGRAM_CHAT_ID=${TELEGRAM_CHAT_ID}
+      
+      # Google Sheets config
+      - GOOGLE_SHEET_ID=${GOOGLE_SHEET_ID:-1yqYjPWOZGTD6DMClrCvv_Gt5ZhftuUxuat1leqWTsIw}
+      
+      # Redis config
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      
+      # Trading config - v3.3 Risk Management defaults
+      - MIN_VOLUME_24H=${MIN_VOLUME_24H:-10000000}
+      - MAX_VOLUME_24H=${MAX_VOLUME_24H:-500000000}
+      - SCAN_INTERVAL=${SCAN_INTERVAL:-90}
+      - ALERT_COOLDOWN=${ALERT_COOLDOWN:-900}
+      
+      # Real-time mode (WebSocket instead of polling)
+      - REALTIME_MODE=${REALTIME_MODE:-true}
+      
+      # Timezone
+      - TZ=Asia/Ho_Chi_Minh
+    volumes:
+      - ./logs:/app/logs
+      - ./charts:/app/charts
+      - ./credentials.json:/app/credentials.json:ro
+    networks:
+      - bot-network
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import requests; requests.get('https://open-api.bingx.com/openApi/swap-v2/quote/ticker', timeout=5)"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+  redis:
+    image: redis:7-alpine
+    container_name: bingx-redis
+    restart: unless-stopped
+    command: redis-server --appendonly yes
+    volumes:
+      - redis-data:/data
+    networks:
+      - bot-network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+networks:
+  bot-network:
+    driver: bridge
+
+volumes:
+  redis-data:
