@@ -103,10 +103,10 @@ SCORE_POINTS = {
     'insurance_bonus': 15,     # Shooting Star + RSI Div
 }
 
-# Thresholds - STRICT for high winrate (v2.1 - increased for better quality)
-THRESHOLD_DIAMOND = 80  # High confluence required (was 75)
-THRESHOLD_GOLD = 60     # Good quality signals (was 55)
-THRESHOLD_SILVER = 45   # Minimum acceptable (was 40)
+# Thresholds - VERY RELAXED for bear market signals  
+THRESHOLD_DIAMOND = 70  # High confluence required
+THRESHOLD_GOLD = 40     # Lowered for bear market (was 50)
+THRESHOLD_SILVER = 35   # Minimum acceptable
 
 # Minimum confirmations required for each tier
 MIN_CONFIRMATIONS_DIAMOND = 3  # Need at least 3 confirmations for DIAMOND

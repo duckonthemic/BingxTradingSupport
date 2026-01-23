@@ -1081,17 +1081,34 @@ class AlertManager:
                         confidence_points=confidence_points
                     )
                 
-                # In DANGER/WARNING: Only Diamond SHORT allowed
-                if market_state in ["DANGER", "WARNING"]:
+                # In DANGER: Only Diamond SHORT allowed
+                # In WARNING: Allow Diamond and GOLD SHORT (relaxed for bear market)
+                if market_state == "DANGER":
                     if signal_tier != SignalTier.DIAMOND:
-                        logger.info(f"🚫 SHORT blocked: {coin.symbol} is {signal_tier.value} but {market_state} state requires DIAMOND")
+                        logger.info(f"🚫 SHORT blocked: {coin.symbol} is {signal_tier.value} but DANGER state requires DIAMOND")
                         return ScanResult(
                             symbol=coin.symbol,
                             success=True,
                             indicators=indicators,
                             setup=best_setup,
                             filter_result=FilterResult.REJECT_LOW_RR,
-                            filter_reason=f"Market State: {market_state} - Only Diamond SHORT allowed",
+                            filter_reason=f"Market State: DANGER - Only Diamond SHORT allowed",
+                            checklist_score=checklist,
+                            signal_grade=signal_grade,
+                            confidence_score=confidence,
+                            signal_tier=signal_tier,
+                            confidence_points=confidence_points
+                        )
+                elif market_state == "WARNING":
+                    if signal_tier not in [SignalTier.DIAMOND, SignalTier.GOLD]:
+                        logger.info(f"🚫 SHORT blocked: {coin.symbol} is {signal_tier.value} but WARNING state requires GOLD+")
+                        return ScanResult(
+                            symbol=coin.symbol,
+                            success=True,
+                            indicators=indicators,
+                            setup=best_setup,
+                            filter_result=FilterResult.REJECT_LOW_RR,
+                            filter_reason=f"Market State: WARNING - Only Diamond/Gold SHORT allowed",
                             checklist_score=checklist,
                             signal_grade=signal_grade,
                             confidence_score=confidence,
@@ -1218,6 +1235,11 @@ class AlertManager:
                     # Update RiskManager's BTC filter with EMA200 for Market Regime
                     ctx = await self.context_manager.get_current()
                     if ctx:
+                        # Update BTC trend for MTF filter
+                        self.trade_filter.update_btc_trend(
+                            trend=ctx.btc_trend,
+                            ema_distance_pct=ctx.btc_ema89_distance_pct
+                        )
                         self.risk_manager.update_btc_state(
                             price=btc_price,
                             change_1h=change_1h,
@@ -1258,6 +1280,39 @@ class AlertManager:
             # Check cooldown
             if await self.redis.check_cooldown(result.symbol, result.setup.strategy.value):
                 return
+            
+            # ========== REFRESH REALTIME PRICE ==========
+            # Get fresh ticker right before sending to avoid stale entry price
+            try:
+                fresh_ticker = await self.rest_client.get_futures_ticker(result.symbol)
+                if fresh_ticker:
+                    fresh_price = float(fresh_ticker.get('lastPrice', 0))
+                    old_entry = result.optimized_levels.entry
+                    
+                    # Update entry and recalculate levels if price changed significantly
+                    if fresh_price > 0:
+                        price_diff_pct = abs(fresh_price - old_entry) / old_entry * 100
+                        
+                        # If price moved >0.5%, update levels
+                        if price_diff_pct > 0.5:
+                            logger.info(f"💹 {result.symbol}: Refreshed price {old_entry:.6g} → {fresh_price:.6g} (+{price_diff_pct:.2f}%)")
+                            
+                            # Convert direction string to enum
+                            from ..analysis.trade_filter import TradeDirection
+                            direction_enum = TradeDirection.LONG if result.setup.direction == "LONG" else TradeDirection.SHORT
+                            
+                            # Recalculate levels with fresh price
+                            new_levels = self.trade_filter.calculate_optimized_levels(
+                                symbol=result.symbol,
+                                direction=direction_enum,
+                                entry_price=fresh_price,
+                                atr=result.indicators.atr,
+                                swing_high=result.indicators.swing_high_20,
+                                swing_low=result.indicators.swing_low_20
+                            )
+                            result.optimized_levels = new_levels
+            except Exception as e:
+                logger.debug(f"Price refresh failed: {e}")
             
             # Funding rate
             funding_rate = None
@@ -1518,7 +1573,7 @@ class AlertManager:
         lines.append("━━━━━━━━━━━━━━━━━━━━━")
         lines.append(f"{direction_emoji} <b>{setup.direction}</b>")
         lines.append("")
-        lines.append(f"Entry: {lvl.entry:,.8g}")
+        lines.append(f"Entry: {lvl.entry:,.8g} ⚡ (Market)")
         
         # Show dynamic SL for counter-trend
         if result.dynamic_sl_price > 0:

@@ -286,6 +286,11 @@ class StrategyDetector:
                     setup.reasons.append("⚠️ Counter-trend (EMA bullish)")
                 setups.append(setup)
         
+        # BEARISH CONTINUATION - Simple trend following for bearish market
+        if allowed in ["SHORT", "BOTH_BEARISH_BIAS"]:
+            if setup := self._detect_bearish_continuation(symbol, df_m5, df_h1, current_price, atr, momentum):
+                setups.append(setup)
+        
         # BB BOUNCE - Works in any market condition (range trading)
         if setup := self._detect_bb_bounce_long(symbol, df_m15, current_price, atr, momentum):
             setup.confidence *= 0.9  # Slightly lower confidence for range trades
@@ -1245,5 +1250,104 @@ class StrategyDetector:
                         has_volume_spike=momentum.has_volume_spike,
                         zone_type="BB_UPPER"
                     )
+        
+        return None
+
+    def _detect_bearish_continuation(
+        self, symbol: str, df_m5: pd.DataFrame, df_h1: pd.DataFrame,
+        current_price: float, atr: float, momentum: MomentumConfirm
+    ) -> Optional[TradeSetup]:
+        """
+        Detect Bearish Continuation - Simple trend following for bear market.
+        Triggers when price is in downtrend and has small bounce/consolidation.
+        """
+        if df_m5.empty or len(df_m5) < 20 or df_h1.empty:
+            return None
+        
+        closes_m5 = df_m5['close'].values
+        highs_m5 = df_m5['high'].values
+        lows_m5 = df_m5['low'].values
+        closes_h1 = df_h1['close'].values
+        
+        # Calculate EMAs
+        ema20_m5 = self._calc_ema(closes_m5, 20)
+        ema50_m5 = self._calc_ema(closes_m5, 50) if len(closes_m5) >= 50 else ema20_m5
+        ema34_h1 = self._calc_ema(closes_h1, 34)
+        ema89_h1 = self._calc_ema(closes_h1, 89)
+        
+        # Conditions for bearish continuation:
+        # 1. H1 trend is bearish (price < EMA34 < EMA89 OR EMA34 < EMA89)
+        # 2. M5 price bounced slightly (touched or near EMA20)
+        # 3. RSI not oversold (room to fall)
+        # 4. Current candle shows rejection (upper wick)
+        
+        h1_bearish = ema34_h1 < ema89_h1 or current_price < ema34_h1
+        
+        if not h1_bearish:
+            return None
+        
+        # Check if price recently touched EMA20 (bounce point)
+        recent_highs = highs_m5[-5:]
+        ema20_touch = any(h >= ema20_m5 * 0.995 for h in recent_highs)
+        
+        # Price should be near or below EMA20 now
+        near_ema = current_price <= ema20_m5 * 1.02
+        
+        # RSI not oversold (has room to fall)
+        rsi_ok = momentum.rsi > 30 and momentum.rsi < 60
+        
+        # WaveTrend confirmation (bearish)
+        wt_bearish = momentum.wt1 < momentum.wt2 or momentum.wt1 < 0
+        
+        if h1_bearish and (ema20_touch or near_ema) and rsi_ok:
+            reasons = [
+                f"📉 H1 trend bearish (EMA34 < EMA89)",
+                f"📊 Price rejected at EMA20 ({ema20_m5:.6g})",
+                f"RSI: {momentum.rsi:.0f} (room to fall)"
+            ]
+            
+            confidence = 0.55  # Lower confidence for simple setup
+            
+            if wt_bearish:
+                confidence += 0.10
+                reasons.append("✅ WaveTrend bearish")
+            
+            if momentum.wt_cross_down:
+                confidence += 0.10
+                reasons.append("✅ WaveTrend cross down")
+            
+            if momentum.has_volume_spike:
+                confidence += 0.05
+                reasons.append(f"✅ Volume spike {momentum.volume_ratio:.1f}x")
+            
+            # Levels
+            entry = current_price
+            recent_high = max(highs_m5[-5:])
+            sl = max(recent_high + atr * 0.2, entry + atr * 0.5)
+            risk = sl - entry
+            
+            tp1 = entry - risk * 1.5  # 1.5R
+            tp2 = entry - risk * 2.5  # 2.5R
+            tp3 = entry - risk * 4    # 4R
+            
+            rr = (entry - tp1) / risk if risk > 0 else 0
+            
+            if rr >= 1.3:  # Lower R:R requirement
+                return TradeSetup(
+                    strategy=StrategyType.EMA_PULLBACK,  # Reuse existing type
+                    symbol=symbol,
+                    direction="SHORT",
+                    entry_price=entry,
+                    stop_loss=sl,
+                    take_profit_1=tp1,
+                    take_profit_2=tp2,
+                    take_profit_3=tp3,
+                    confidence=min(1.0, confidence),
+                    risk_reward=rr,
+                    reasons=reasons,
+                    has_wavetrend_cross=momentum.wt_cross_down,
+                    has_volume_spike=momentum.has_volume_spike,
+                    zone_type="BEARISH_CONTINUATION"
+                )
         
         return None

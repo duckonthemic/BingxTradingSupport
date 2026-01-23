@@ -294,7 +294,7 @@ class RedisClient:
             can_send = score >= 80  # Diamond only (was 65)
         else:
             mode = "OPEN"
-            can_send = score >= 60  # Match new GOLD threshold (was 55)
+            can_send = score >= 40  # Match lowered GOLD threshold
         
         logger.debug(f"Rate limit: {mode} mode, {alerts_count}/{max_alerts} alerts, score={score}, can_send={can_send}")
         

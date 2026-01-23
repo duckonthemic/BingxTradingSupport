@@ -154,8 +154,8 @@ class IEScanner:
                 result = await self._scan_cycle()
                 self._scan_count += 1
                 
-                # Log summary
-                kz_status = f"[{result.kill_zone}]" if result.kill_zone else "[No KZ]"
+                # Log summary - show session instead of KZ
+                kz_status = f"[{result.kill_zone}]" if result.kill_zone else "[24/7]"
                 logger.info(
                     f"🎯 IE Scan #{self._scan_count} {kz_status} | "
                     f"FVG:{result.fvgs_found} Zone:{result.coins_in_zone} "
@@ -236,14 +236,10 @@ class IEScanner:
         if cycle_setups:
             best_setup = self.entry_calculator.filter_best_setup(cycle_setups)
             
-            if best_setup and is_kz:
-                # Send alert
+            # Send alert 24/7 (KZ check removed)
+            if best_setup:
                 await self._send_setup_alert(best_setup)
                 result.alerts_sent += 1
-            elif best_setup and not is_kz:
-                # Store for later (when Kill Zone starts)
-                self.pending_setups.append(best_setup)
-                logger.info(f"🎯 IE: Setup ready for {best_setup.symbol}, waiting for Kill Zone")
         
         result.scan_duration_ms = int((datetime.utcnow() - start_time).total_seconds() * 1000)
         return result
@@ -290,13 +286,26 @@ class IEScanner:
             
             # Check if FVG is still valid
             if not fvg.is_fresh(self.config.FVG_MAX_AGE_HOURS):
+                logger.debug(f"🎯 IE: {symbol} FVG expired after {fvg.age_hours:.1f}h")
                 state.reset()
                 return None
             
-            # Check if price is in FVG
+            # Check if price is in FVG - log distance for debugging
+            distance_to_fvg = 0.0
+            if direction == "SHORT":
+                # For SHORT, FVG is above price (bearish FVG)
+                distance_to_fvg = ((fvg.bottom - current_price) / current_price) * 100
+            else:
+                # For LONG, FVG is below price (bullish FVG)
+                distance_to_fvg = ((current_price - fvg.top) / current_price) * 100
+            
             if fvg.is_price_in_gap(current_price):
                 state.phase = ScanPhase.IN_FVG_ZONE
                 logger.info(f"🎯 IE: {symbol} price entered H1 FVG zone!")
+            else:
+                # Log distance to FVG for debugging
+                if abs(distance_to_fvg) < 5:  # Only log if close to FVG
+                    logger.debug(f"🎯 IE: {symbol} price {current_price:.4f} | FVG {fvg.bottom:.4f}-{fvg.top:.4f} | dist={distance_to_fvg:+.2f}%")
         
         # Phase 3: Watch for MSS on M5
         if state.phase == ScanPhase.IN_FVG_ZONE and state.active_fvg:
@@ -320,8 +329,10 @@ class IEScanner:
         if state.phase == ScanPhase.MSS_DETECTED and state.active_fvg and state.mss:
             m5_candles = await self._fetch_candles(symbol, "5m", 100)
             if not m5_candles:
+                logger.warning(f"🎯 IE: {symbol} Phase 4 - No M5 candles")
                 return None
             
+            logger.info(f"🎯 IE: {symbol} Phase 4 - Calculating setup...")
             setup = self.entry_calculator.calculate_setup(
                 symbol=symbol,
                 direction=direction,
@@ -338,7 +349,12 @@ class IEScanner:
             if setup:
                 state.setup = setup
                 state.phase = ScanPhase.SETUP_READY
+                logger.info(f"🎯 IE: {symbol} Setup created! Valid={setup.is_valid} R:R={setup.rr_ratio_1:.2f}")
+                if not setup.is_valid:
+                    logger.info(f"🎯 IE: {symbol} Setup invalid: {setup.invalidation_reason}")
                 return setup
+            else:
+                logger.warning(f"🎯 IE: {symbol} Phase 4 - calculate_setup returned None")
         
         return None
     
@@ -419,7 +435,7 @@ class IEScanner:
 # Factory function to create scanner with dependencies
 def create_ie_scanner(
     rest_client,  # BingX REST client
-    telegram_bot,  # Telegram bot instance
+    telegram_bot,  # Telegram bot instance (Application object)
     sheets_client = None,  # Optional Google Sheets client
     config: IETradeConfig = DEFAULT_CONFIG
 ) -> IEScanner:
@@ -428,27 +444,44 @@ def create_ie_scanner(
     
     Args:
         rest_client: BingX REST API client
-        telegram_bot: Telegram bot for sending alerts
+        telegram_bot: Telegram Application object
         sheets_client: Optional Google Sheets client
         config: IE Trade configuration
         
     Returns:
         Configured IEScanner instance
     """
+    from ..config import config as app_config
     
     async def fetch_candles(symbol: str, timeframe: str, limit: int):
         """Adapter for REST client"""
         return await rest_client.get_klines(symbol, timeframe, limit)
     
     async def send_alert(message: str):
-        """Adapter for Telegram bot"""
-        await telegram_bot.send_message(message, parse_mode='Markdown')
+        """Adapter for Telegram bot - use bot from Application"""
+        try:
+            await telegram_bot.bot.send_message(
+                chat_id=app_config.telegram.chat_id,
+                text=message,
+                parse_mode='Markdown'
+            )
+        except Exception as e:
+            logger.error(f"Failed to send IE alert: {e}")
     
-    async def log_to_sheet(row: dict):
-        """Adapter for Sheets client"""
+    async def log_to_sheet(setup):
+        """Adapter for Sheets client - uses IESheetLogger"""
         if sheets_client:
-            # This will need to be implemented based on your sheets_client API
-            pass
+            try:
+                from .sheet_logger import IESheetLogger
+                ie_logger = IESheetLogger(sheets_client)
+                row = await ie_logger.log_ie_trade(setup)
+                if row > 0:
+                    logger.info(f"📊 IE trade logged to sheet: row {row}")
+                return row
+            except Exception as e:
+                logger.error(f"❌ Failed to log IE trade to sheet: {e}")
+                return 0
+        return 0
     
     return IEScanner(
         config=config,

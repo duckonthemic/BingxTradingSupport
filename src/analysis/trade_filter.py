@@ -80,6 +80,13 @@ class TradeFilter:
         self._btc_price_15m_ago: Optional[float] = None
         self._btc_current_price: Optional[float] = None
         self._btc_change_pct: float = 0.0
+        self._btc_trend: str = "NEUTRAL"  # BULLISH, BEARISH, NEUTRAL
+        self._btc_ema_distance_pct: float = 0.0  # % from EMA89
+    
+    def update_btc_trend(self, trend: str, ema_distance_pct: float = 0.0):
+        """Update BTC overall trend from context manager."""
+        self._btc_trend = trend
+        self._btc_ema_distance_pct = ema_distance_pct
     
     def update_btc_state(
         self, 
@@ -156,10 +163,13 @@ class TradeFilter:
             if current_price < ema89_h1:
                 return True, f"Price ${current_price:.4f} < EMA89 H1 ${ema89_h1:.4f}"
             else:
-                # Allow if within 5% of EMA (relaxed for sideways/scalping)
+                # Allow if within 10% of EMA (relaxed for bearish market)
                 distance_pct = ((current_price - ema89_h1) / current_price) * 100
-                if distance_pct < 5.0 and self.allow_range_trading:
-                    return True, f"Scalp zone - {distance_pct:.2f}% from EMA89"
+                if distance_pct < 10.0:  # Increased from 5% to 10%
+                    return True, f"Near EMA zone - {distance_pct:.2f}% from EMA89 - SHORT allowed"
+                # Also allow SHORT when BTC trend is bearish
+                if self._btc_trend == "BEARISH":
+                    return True, f"BTC BEARISH trend ({self._btc_ema_distance_pct:.1f}% from EMA89) - SHORT allowed"
                 return False, f"Price ${current_price:.4f} > EMA89 H1 ${ema89_h1:.4f} - SHORT blocked"
         
         return True, "No filter"
@@ -219,17 +229,17 @@ class TradeFilter:
         # We want to risk 50% of position ($1), so SL at 2.5% for 15x
         
         if leverage >= 100:
-            # High leverage (BTC, ETH, SOL, Gold): very tight stop
-            sl_multiplier = 0.3  # 0.3 ATR
+            # High leverage (BTC, ETH, SOL, Gold): moderate stop
+            sl_multiplier = 1.5  # 1.5 ATR - wider for volatility
         elif leverage >= 50:
-            sl_multiplier = 0.5  # 0.5 ATR
+            sl_multiplier = 1.8  # 1.8 ATR
         else:
-            sl_multiplier = 0.8  # 0.8 ATR for altcoins
+            sl_multiplier = 2.0  # 2.0 ATR for altcoins - need more buffer
         
         sl_distance = atr * sl_multiplier
         
-        # Ensure SL is not too tight (min 0.1% for high leverage)
-        min_sl_pct = 0.001 if leverage >= 100 else 0.005
+        # Ensure SL is not too tight (min 0.5% for high leverage, 2% for altcoins)
+        min_sl_pct = 0.005 if leverage >= 100 else 0.02
         min_sl_distance = entry_price * min_sl_pct
         sl_distance = max(sl_distance, min_sl_distance)
         

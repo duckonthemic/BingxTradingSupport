@@ -174,18 +174,18 @@ class BTCCorrelationFilter:
         """
         Get minimum tier allowed for SHORT based on market regime.
         
-        ADAPTIVE SHORT RULES:
+        ADAPTIVE SHORT RULES (RELAXED for bear market):
         - BULLISH (Price > EMA200): SHORT only Diamond (Sniper mode)
         - BEARISH (Price < EMA200): SHORT can be Gold (Scalp mode)
-        - NEUTRAL: SHORT only Diamond (conservative)
+        - NEUTRAL: SHORT can be Gold (relaxed - allow during transition)
         
         Returns:
             "DIAMOND" or "GOLD"
         """
-        if self.market_regime == MarketRegime.BEARISH:
-            return "GOLD"  # Allow Gold tier SHORTs in bear market
+        if self.market_regime in [MarketRegime.BEARISH, MarketRegime.NEUTRAL]:
+            return "GOLD"  # Allow Gold tier SHORTs in bear/neutral market
         else:
-            return "DIAMOND"  # Sniper mode - only Diamond SHORTs
+            return "DIAMOND"  # Sniper mode - only Diamond SHORTs in bull
     
     def check_correlation(
         self,
@@ -215,13 +215,14 @@ class BTCCorrelationFilter:
         
         # Check context freshness (max 2 minutes old)
         if self.last_update is None:
+            # Allow trade when BTC context not yet available (startup)
             return BTCCorrelationResult(
-                is_safe=False,
+                is_safe=True,  # Changed to True - allow during startup
                 btc_trend="UNKNOWN",
                 btc_change_1h=0,
                 btc_change_4h=0,
                 btc_ema_position="UNKNOWN",
-                reason="❌ BTC context not available"
+                reason="⚠️ BTC context initializing - trade allowed"
             )
         
         age_seconds = (datetime.now() - self.last_update).total_seconds()

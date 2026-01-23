@@ -341,7 +341,7 @@ class GoogleSheetsClient:
                 "OPEN",  # Status
                 "",  # Close Time - empty until closed
                 trade.note,  # Note - strategy reason
-                "FALSE",  # End Trade - checkbox unchecked (string for checkbox)
+                False,  # End Trade - checkbox unchecked (boolean for checkbox)
                 "",  # User Note - empty for user to fill
                 trade.grade,  # Grade (A_SNIPER, B_SCALP, etc)
                 trade.layers_passed,  # Layers (4/4, 3/4, etc)
@@ -372,6 +372,11 @@ class GoogleSheetsClient:
         """Add checkbox data validation to End Trade cell."""
         try:
             sheet_id = self.sheet.id
+            
+            # First set the cell value to FALSE (boolean)
+            self.sheet.update_acell(f'N{row}', False)
+            
+            # Then add data validation for checkbox
             requests = [{
                 "setDataValidation": {
                     "range": {"sheetId": sheet_id, "startRowIndex": row-1, "endRowIndex": row, 
@@ -383,8 +388,9 @@ class GoogleSheetsClient:
                 }
             }]
             self.sheet.spreadsheet.batch_update({"requests": requests})
+            logger.debug(f"✅ Checkbox added to row {row}")
         except Exception as e:
-            logger.debug(f"Checkbox error: {e}")
+            logger.error(f"❌ Checkbox error at row {row}: {e}")
     
     async def has_open_trade(self, coin: str) -> bool:
         """

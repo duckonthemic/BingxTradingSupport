@@ -117,7 +117,7 @@ class IETradeConfig:
     ENTRY_FVG_LEVEL: float = 0.5
     
     # Minimum Risk:Reward ratio to TP1
-    MIN_RR_RATIO: float = 2.0  # 1:2 minimum
+    MIN_RR_RATIO: float = 1.5  # 1:1.5 minimum (relaxed for volatile market)
     
     # ==================== POSITION MANAGEMENT ====================
     
@@ -147,7 +147,7 @@ class IETradeConfig:
     SCAN_ONLY_KILL_ZONES: bool = False  # Scan 24/7 but alert only in KZ
     
     # Alert only during kill zones
-    ALERT_ONLY_KILL_ZONES: bool = True
+    ALERT_ONLY_KILL_ZONES: bool = False  # Disable: alert 24/7
     
     # ==================== TIMEZONE ====================
     
