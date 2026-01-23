@@ -5,10 +5,12 @@ Logs all trades and updates results automatically.
 
 import os
 import logging
+import time
 from datetime import datetime
 from typing import Optional, Dict, List, Tuple
 from dataclasses import dataclass
 import asyncio
+from functools import wraps
 
 try:
     import gspread
@@ -18,6 +20,28 @@ except ImportError:
     GSPREAD_AVAILABLE = False
 
 logger = logging.getLogger(__name__)
+
+
+def retry_on_quota(max_retries: int = 3, base_delay: float = 5.0):
+    """Decorator to retry on Google Sheets quota errors (429)."""
+    def decorator(func):
+        @wraps(func)
+        async def wrapper(*args, **kwargs):
+            for attempt in range(max_retries):
+                try:
+                    return await func(*args, **kwargs)
+                except Exception as e:
+                    error_str = str(e)
+                    if "429" in error_str or "Quota exceeded" in error_str:
+                        delay = base_delay * (2 ** attempt)  # Exponential backoff
+                        logger.warning(f"⏳ Quota exceeded, retrying in {delay:.0f}s... (attempt {attempt + 1}/{max_retries})")
+                        await asyncio.sleep(delay)
+                    else:
+                        raise
+            # Final attempt
+            return await func(*args, **kwargs)
+        return wrapper
+    return decorator
 
 
 @dataclass
@@ -258,6 +282,7 @@ class GoogleSheetsClient:
         except Exception as e:
             logger.error(f"Error setting up sheet: {e}")
     
+    @retry_on_quota(max_retries=3, base_delay=5.0)
     async def log_trade(self, trade: TradeRecord) -> int:
         """
         Log a new trade to the sheet.
@@ -299,8 +324,11 @@ class GoogleSheetsClient:
             logger.info(f"📊 Logging {trade.coin} {trade.signal}: Entry={trade.entry}, SL={trade.stoploss}, TP={trade.take_profit}")
             
             # Find next empty row
-            all_values = self.sheet.col_values(1)  # Column A
+            all_values = self.sheet.get_all_values()
+            
+            # Simply find the next row after all data
             next_row = len(all_values) + 1
+                
             if next_row < 6:
                 next_row = 6  # Start after headers
             
@@ -362,6 +390,10 @@ class GoogleSheetsClient:
             self._format_signal_cell(next_row, trade.signal)
             
             logger.info(f"📊 Trade logged: {trade.coin} {trade.signal} @ row {next_row}")
+            
+            # Update total row (add/move to bottom)
+            await self._update_total_row()
+            
             return next_row
             
         except Exception as e:
@@ -916,6 +948,260 @@ class GoogleSheetsClient:
         except Exception as e:
             logger.error(f"Error getting stats: {e}")
             return {"total": 0, "wins": 0, "losses": 0, "winrate": 0}
+    
+    async def end_all_trades(self) -> Dict:
+        """
+        End all open trades (set End Trade = TRUE for all).
+        
+        Returns:
+            Dict with count of trades ended and total PnL
+        """
+        if not self._connected or not self.sheet:
+            return {"count": 0, "total_pnl": 0.0, "error": "Not connected"}
+            
+        try:
+            all_data = self.sheet.get_all_values()
+            trades_ended = 0
+            total_pnl = 0.0
+            rows_to_update = []
+            
+            for i, row in enumerate(all_data[5:], start=6):  # Skip headers
+                if len(row) >= 14 and row[2]:  # Has coin
+                    status = row[10] if len(row) > 10 else ""
+                    end_trade = row[13] if len(row) > 13 else ""
+                    
+                    # Skip already closed trades
+                    is_closed = end_trade.upper() in ["TRUE", "✓", "✔", "1"]
+                    if is_closed:
+                        continue
+                    
+                    # Mark as ended
+                    rows_to_update.append(i)
+                    
+                    # Get PnL if available
+                    pnl_str = row[9] if len(row) > 9 else "0"
+                    try:
+                        pnl = float(pnl_str.replace('%', '').replace(',', '.'))
+                        total_pnl += pnl
+                    except ValueError:
+                        pass
+                    
+                    trades_ended += 1
+            
+            # Batch update all End Trade checkboxes
+            if rows_to_update:
+                batch_data = []
+                for row_num in rows_to_update:
+                    batch_data.append({
+                        'range': f'N{row_num}',
+                        'values': [[True]]
+                    })
+                self.sheet.batch_update(batch_data)
+                
+                # Also set Status to CLOSED if not already TP/SL
+                batch_status = []
+                for row_num in rows_to_update:
+                    row_data = all_data[row_num - 1]  # 0-indexed
+                    status = row_data[10] if len(row_data) > 10 else ""
+                    if status.upper() not in ["TP", "SL"]:
+                        batch_status.append({
+                            'range': f'K{row_num}',
+                            'values': [["CLOSED"]]
+                        })
+                if batch_status:
+                    self.sheet.batch_update(batch_status)
+            
+            logger.info(f"✅ Ended {trades_ended} trades, Total PnL: {total_pnl:.2f}%")
+            
+            # Update total row
+            await self._update_total_row()
+            
+            return {
+                "count": trades_ended,
+                "total_pnl": round(total_pnl, 2)
+            }
+            
+        except Exception as e:
+            logger.error(f"Error ending all trades: {e}")
+            return {"count": 0, "total_pnl": 0.0, "error": str(e)}
+    
+    async def _update_total_row(self):
+        """Update statistics table at T6:X11 (5 columns x 6 rows)."""
+        if not self._connected or not self.sheet:
+            return
+            
+        try:
+            all_data = self.sheet.get_all_values()
+            
+            # Initialize stats by strategy
+            strategies = {
+                "EMA_PULLBACK": {"trades": 0, "wins": 0, "losses": 0, "pnl": 0.0},
+                "BB_BOUNCE": {"trades": 0, "wins": 0, "losses": 0, "pnl": 0.0},
+                "IE": {"trades": 0, "wins": 0, "losses": 0, "pnl": 0.0},
+                "LIQ_SWEEP": {"trades": 0, "wins": 0, "losses": 0, "pnl": 0.0},
+                "SFP": {"trades": 0, "wins": 0, "losses": 0, "pnl": 0.0},
+            }
+            
+            # Parse all trades
+            for row in all_data[5:]:  # Skip headers (row 1-5)
+                if len(row) >= 14 and row[2]:  # Has coin
+                    # Skip if it's a header or empty
+                    coin = row[2].strip()
+                    if not coin or coin.upper() in ["COIN", "TOTAL"]:
+                        continue
+                    
+                    # Get strategy from Note column (M = index 12)
+                    note = row[12] if len(row) > 12 else ""
+                    
+                    # Determine strategy
+                    strategy = None
+                    note_upper = note.upper()
+                    if "IE" in note_upper or "IE TRADE" in note_upper:
+                        strategy = "IE"
+                    elif "EMA" in note_upper or "PULLBACK" in note_upper:
+                        strategy = "EMA_PULLBACK"
+                    elif "BB" in note_upper or "BOUNCE" in note_upper:
+                        strategy = "BB_BOUNCE"
+                    elif "LIQ" in note_upper or "SWEEP" in note_upper:
+                        strategy = "LIQ_SWEEP"
+                    elif "SFP" in note_upper or "BREAKER" in note_upper:
+                        strategy = "SFP"
+                    else:
+                        # Default to EMA_PULLBACK if can't determine
+                        strategy = "EMA_PULLBACK"
+                    
+                    # Get PnL
+                    pnl_str = row[9] if len(row) > 9 else "0"
+                    try:
+                        pnl = float(pnl_str.replace('%', '').replace(',', '.'))
+                        strategies[strategy]["trades"] += 1
+                        strategies[strategy]["pnl"] += pnl
+                        if pnl > 0:
+                            strategies[strategy]["wins"] += 1
+                        elif pnl < 0:
+                            strategies[strategy]["losses"] += 1
+                    except ValueError:
+                        pass
+            
+            # Build stats table (5 columns: Strategy, Total trade, Winrate, PnL(%), Pnl(usd))
+            # Header row
+            table_data = [
+                ["", "Total trade", "Winrate", "PnL(%)", "Pnl(usd)"],  # Header
+            ]
+            
+            # Strategy rows
+            strategy_order = ["EMA_PULLBACK", "BB_BOUNCE", "IE", "LIQ_SWEEP", "SFP"]
+            for strat in strategy_order:
+                stats = strategies[strat]
+                trades = stats["trades"]
+                wins = stats["wins"]
+                pnl_pct = stats["pnl"]
+                
+                # Calculate winrate
+                winrate = (wins / trades * 100) if trades > 0 else 0
+                
+                # Calculate USD (1 USD per trade, no leverage in calculation)
+                pnl_usd = pnl_pct / 100  # Convert % to USD (1 USD base)
+                
+                table_data.append([
+                    strat,
+                    str(trades) if trades > 0 else "",
+                    f"{winrate:.1f}%" if trades > 0 else "",
+                    f"{pnl_pct:.2f}%" if trades > 0 else "",
+                    f"${pnl_usd:.2f}" if trades > 0 else ""
+                ])
+            
+            # Update table at T6:X11 (T=column 20, U=21, V=22, W=23, X=24)
+            self.sheet.update('T6:X11', table_data)
+            
+            # Format the stats table
+            self._format_stats_table()
+            
+            # Calculate grand totals
+            total_trades = sum(s["trades"] for s in strategies.values())
+            total_wins = sum(s["wins"] for s in strategies.values())
+            total_pnl = sum(s["pnl"] for s in strategies.values())
+            total_winrate = (total_wins / total_trades * 100) if total_trades > 0 else 0
+            
+            logger.info(f"📊 Stats updated: {total_trades} trades, PnL: {total_pnl:.2f}%, WR: {total_winrate:.1f}%")
+            
+        except Exception as e:
+            logger.error(f"Error updating stats table: {e}")
+    
+    def _format_stats_table(self):
+        """Format the statistics table at T6:X11."""
+        try:
+            sheet_id = self.sheet.id
+            
+            # T=19 (0-indexed), X=23
+            requests = [
+                # Header row bold with background
+                {
+                    "repeatCell": {
+                        "range": {
+                            "sheetId": sheet_id,
+                            "startRowIndex": 5,  # Row 6 (0-indexed)
+                            "endRowIndex": 6,
+                            "startColumnIndex": 19,  # Column T
+                            "endColumnIndex": 24   # Column X
+                        },
+                        "cell": {
+                            "userEnteredFormat": {
+                                "backgroundColor": {"red": 0.8, "green": 0.8, "blue": 0.8},
+                                "textFormat": {"bold": True},
+                                "horizontalAlignment": "CENTER"
+                            }
+                        },
+                        "fields": "userEnteredFormat(backgroundColor,textFormat,horizontalAlignment)"
+                    }
+                },
+                # Strategy names column bold
+                {
+                    "repeatCell": {
+                        "range": {
+                            "sheetId": sheet_id,
+                            "startRowIndex": 6,  # Row 7-11
+                            "endRowIndex": 11,
+                            "startColumnIndex": 19,  # Column T
+                            "endColumnIndex": 20
+                        },
+                        "cell": {
+                            "userEnteredFormat": {
+                                "textFormat": {"bold": True}
+                            }
+                        },
+                        "fields": "userEnteredFormat(textFormat)"
+                    }
+                },
+                # Add borders
+                {
+                    "updateBorders": {
+                        "range": {
+                            "sheetId": sheet_id,
+                            "startRowIndex": 5,
+                            "endRowIndex": 11,
+                            "startColumnIndex": 19,
+                            "endColumnIndex": 24
+                        },
+                        "top": {"style": "SOLID", "width": 1},
+                        "bottom": {"style": "SOLID", "width": 1},
+                        "left": {"style": "SOLID", "width": 1},
+                        "right": {"style": "SOLID", "width": 1},
+                        "innerHorizontal": {"style": "SOLID", "width": 1},
+                        "innerVertical": {"style": "SOLID", "width": 1}
+                    }
+                },
+                # Set column widths
+                {"updateDimensionProperties": {"range": {"sheetId": sheet_id, "dimension": "COLUMNS", "startIndex": 19, "endIndex": 20}, "properties": {"pixelSize": 120}, "fields": "pixelSize"}},
+                {"updateDimensionProperties": {"range": {"sheetId": sheet_id, "dimension": "COLUMNS", "startIndex": 20, "endIndex": 21}, "properties": {"pixelSize": 80}, "fields": "pixelSize"}},
+                {"updateDimensionProperties": {"range": {"sheetId": sheet_id, "dimension": "COLUMNS", "startIndex": 21, "endIndex": 22}, "properties": {"pixelSize": 70}, "fields": "pixelSize"}},
+                {"updateDimensionProperties": {"range": {"sheetId": sheet_id, "dimension": "COLUMNS", "startIndex": 22, "endIndex": 23}, "properties": {"pixelSize": 80}, "fields": "pixelSize"}},
+                {"updateDimensionProperties": {"range": {"sheetId": sheet_id, "dimension": "COLUMNS", "startIndex": 23, "endIndex": 24}, "properties": {"pixelSize": 80}, "fields": "pixelSize"}},
+            ]
+            
+            self.sheet.spreadsheet.batch_update({"requests": requests})
+        except Exception as e:
+            logger.debug(f"Format stats table error: {e}")
     
     def get_closed_trades(self) -> List[Dict]:
         """

@@ -64,6 +64,7 @@ class TelegramCommandHandler:
         app.add_handler(CommandHandler("session", self.cmd_session))
         app.add_handler(CommandHandler("help", self.cmd_help))
         app.add_handler(CommandHandler("start", self.cmd_help))
+        app.add_handler(CommandHandler("endall", self.cmd_endall))
         
         # Set commands for menu
         commands = [
@@ -76,6 +77,7 @@ class TelegramCommandHandler:
             BotCommand("coins", "Top coins by volume"),
             BotCommand("news", "Economic calendar"),
             BotCommand("session", "Trading sessions status"),
+            BotCommand("endall", "End all open trades"),
             BotCommand("help", "Show help"),
         ]
         
@@ -552,3 +554,38 @@ Position Size: Diamond $2, Gold $1
 ⏰ Bot v3.5 | Scoring v2.1 | WebSocket Mode
 """
         await update.message.reply_text(msg.strip(), parse_mode='HTML')
+    
+    async def cmd_endall(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """End all open trades in Google Sheets."""
+        try:
+            # Get sheets client from alert manager
+            sheets_client = getattr(self.alert_manager, 'sheets_client', None)
+            
+            if not sheets_client:
+                await update.message.reply_text("❌ Google Sheets not connected")
+                return
+            
+            await update.message.reply_text("⏳ Ending all open trades...")
+            
+            # End all trades
+            result = await sheets_client.end_all_trades()
+            
+            if "error" in result:
+                await update.message.reply_text(f"❌ Error: {result['error']}")
+                return
+            
+            # Format response
+            msg = f"""✅ <b>All Trades Ended</b>
+
+📊 <b>Summary:</b>
+• Trades closed: {result['count']}
+• Total PnL: {result['total_pnl']:+.2f}%
+• USD per trade: $1.00
+
+📈 Total updated in sheet"""
+            
+            await update.message.reply_text(msg.strip(), parse_mode='HTML')
+            
+        except Exception as e:
+            logger.error(f"Error in /endall: {e}")
+            await update.message.reply_text(f"❌ Error: {e}")
