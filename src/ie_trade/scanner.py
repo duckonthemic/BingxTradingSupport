@@ -392,9 +392,9 @@ class IEScanner:
             state.last_alert_at = datetime.utcnow()
             state.alerts_today += 1
             
-            # Log to sheet
+            # Log to sheet (pass setup object, not dict)
             if self.log_to_sheet:
-                await self.log_to_sheet(setup.to_sheet_row())
+                await self.log_to_sheet(setup)
             
             logger.info(f"🎯 IE: Alert sent for {setup.symbol} {setup.direction}")
             

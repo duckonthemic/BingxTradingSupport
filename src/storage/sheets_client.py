@@ -22,24 +22,30 @@ except ImportError:
 logger = logging.getLogger(__name__)
 
 
-def retry_on_quota(max_retries: int = 3, base_delay: float = 5.0):
+def retry_on_quota(max_retries: int = 5, base_delay: float = 10.0):
     """Decorator to retry on Google Sheets quota errors (429)."""
     def decorator(func):
         @wraps(func)
         async def wrapper(*args, **kwargs):
+            last_error = None
             for attempt in range(max_retries):
                 try:
                     return await func(*args, **kwargs)
                 except Exception as e:
                     error_str = str(e)
+                    last_error = e
                     if "429" in error_str or "Quota exceeded" in error_str:
-                        delay = base_delay * (2 ** attempt)  # Exponential backoff
-                        logger.warning(f"⏳ Quota exceeded, retrying in {delay:.0f}s... (attempt {attempt + 1}/{max_retries})")
-                        await asyncio.sleep(delay)
+                        if attempt < max_retries - 1:
+                            delay = base_delay * (2 ** attempt)  # Exponential backoff: 10s, 20s, 40s, 80s
+                            logger.warning(f"⏳ Quota exceeded, retrying in {delay:.0f}s... (attempt {attempt + 1}/{max_retries})")
+                            await asyncio.sleep(delay)
+                        else:
+                            logger.error(f"❌ Quota exceeded after {max_retries} retries - GIVING UP")
+                            raise
                     else:
                         raise
-            # Final attempt
-            return await func(*args, **kwargs)
+            # Should not reach here
+            raise last_error
         return wrapper
     return decorator
 
@@ -391,14 +397,19 @@ class GoogleSheetsClient:
             
             logger.info(f"📊 Trade logged: {trade.coin} {trade.signal} @ row {next_row}")
             
-            # Update total row (add/move to bottom)
-            await self._update_total_row()
+            # Update stats table (force update when new trade)
+            await self._update_total_row(force=True)
             
             return next_row
             
         except Exception as e:
-            logger.error(f"Error logging trade: {e}")
-            return 0
+            # Log with full context for debugging
+            logger.error(f"❌ FAILED to log {trade.coin} {trade.signal} to sheet: {e}")
+            logger.error(f"   Entry={trade.entry}, SL={trade.stoploss}, TP={trade.take_profit}")
+            
+            # Re-raise to alert caller that logging failed
+            # This prevents false tracking when sheet log fails
+            raise
     
     def _add_checkbox(self, row: int):
         """Add checkbox data validation to End Trade cell."""
@@ -667,12 +678,16 @@ class GoogleSheetsClient:
                     status = row[10] if len(row) > 10 else ""  # Column K = Status
                     end_trade = row[13] if len(row) > 13 else ""  # Column N = End Trade
                     
-                    # Consider trade CLOSED if:
-                    # 1. Status is "TP", "SL", or "CLOSED"
-                    # 2. End Trade checkbox is checked (TRUE)
-                    is_closed = status.upper() in ["TP", "SL", "CLOSED"] or end_trade.upper() in ["TRUE", "✓", "✔", "1"]
+                    # Skip if already closed (TP/SL/CLOSED status)
+                    if status.upper() in ["TP", "SL", "CLOSED"]:
+                        continue
                     
-                    if not is_closed:
+                    # Include if:
+                    # 1. Status is OPEN (normal monitoring)
+                    # 2. End Trade is checked (need to close manually)
+                    is_end_trade_checked = end_trade.upper() in ["TRUE", "✓", "✔", "1"]
+                    
+                    if status.upper() == "OPEN" or is_end_trade_checked:
                         # Parse entry/sl/tp (handle comma as decimal separator)
                         try:
                             entry = float(row[5].replace(',', '.')) if row[5] else 0
@@ -686,7 +701,8 @@ class GoogleSheetsClient:
                                 "leverage": leverage,
                                 "entry": entry,
                                 "stoploss": stoploss,
-                                "take_profit": take_profit
+                                "take_profit": take_profit,
+                                "end_trade_checked": is_end_trade_checked
                             }))
                         except (ValueError, IndexError) as e:
                             logger.debug(f"Skip row {i}: {e}")
@@ -721,10 +737,9 @@ class GoogleSheetsClient:
             for row, trade in open_trades:
                 symbol = f"{trade['coin']}-USDT"
                 
-                # First, check if End Trade checkbox is checked
-                try:
-                    end_trade_cell = self.sheet.acell(f'N{row}').value or ""
-                    if end_trade_cell.upper() in ["TRUE", "✓", "✔", "1"]:
+                # Check if End Trade checkbox is checked
+                if trade.get('end_trade_checked', False):
+                    try:
                         # User manually ended trade - close it now
                         # Get current price
                         ticker = await rest_client.get_futures_ticker(symbol)
@@ -755,13 +770,15 @@ class GoogleSheetsClient:
                             close_time = f"CLOSED - {time_str} - {format_price(current_price)}"
                             await self.update_trade_result(row, pnl, "CLOSED", close_time)
                             self._update_cell_raw(f'I{row}', format_price(current_price))
-                            # Mark End Trade as TRUE
-                            self.sheet.update_acell(f'N{row}', 'TRUE')
                             logger.info(f"🛑 {symbol} MANUALLY CLOSED by user: {pnl:.1f}%")
                             updated_count += 1
+                            continue
+                        else:
+                            logger.warning(f"⚠️ Cannot get price for {symbol} to close manually")
+                            continue
+                    except Exception as e:
+                        logger.error(f"Error closing {symbol} manually: {e}")
                         continue
-                except Exception as e:
-                    logger.debug(f"Error checking End Trade for row {row}: {e}")
                 
                 # Get current price
                 try:
@@ -904,6 +921,9 @@ class GoogleSheetsClient:
                 except Exception as e:
                     logger.debug(f"Error updating winrate: {e}")
             
+            # Update stats table after each scan
+            await self._update_total_row()
+            
             return updated_count
             
         except Exception as e:
@@ -1013,8 +1033,8 @@ class GoogleSheetsClient:
             
             logger.info(f"✅ Ended {trades_ended} trades, Total PnL: {total_pnl:.2f}%")
             
-            # Update total row
-            await self._update_total_row()
+            # Update total row (force update)
+            await self._update_total_row(force=True)
             
             return {
                 "count": trades_ended,
@@ -1025,10 +1045,23 @@ class GoogleSheetsClient:
             logger.error(f"Error ending all trades: {e}")
             return {"count": 0, "total_pnl": 0.0, "error": str(e)}
     
-    async def _update_total_row(self):
-        """Update statistics table at T6:X11 (5 columns x 6 rows)."""
+    async def _update_total_row(self, force: bool = False):
+        """Update statistics table at T6:X12 (5 columns x 7 rows including TOTAL).
+        
+        Args:
+            force: If True, bypass rate limiting
+        """
         if not self._connected or not self.sheet:
             return
+        
+        # Rate limit: only update every 5 minutes unless forced
+        now = datetime.now()
+        if not force:
+            if hasattr(self, '_last_stats_update'):
+                elapsed = (now - self._last_stats_update).total_seconds()
+                if elapsed < 300:  # 5 minutes
+                    return
+        self._last_stats_update = now
             
         try:
             all_data = self.sheet.get_all_values()
@@ -1111,17 +1144,27 @@ class GoogleSheetsClient:
                     f"${pnl_usd:.2f}" if trades > 0 else ""
                 ])
             
-            # Update table at T6:X11 (T=column 20, U=21, V=22, W=23, X=24)
-            self.sheet.update('T6:X11', table_data)
-            
-            # Format the stats table
-            self._format_stats_table()
-            
-            # Calculate grand totals
+            # Calculate grand totals for TOTAL row
             total_trades = sum(s["trades"] for s in strategies.values())
             total_wins = sum(s["wins"] for s in strategies.values())
             total_pnl = sum(s["pnl"] for s in strategies.values())
             total_winrate = (total_wins / total_trades * 100) if total_trades > 0 else 0
+            total_pnl_usd = total_pnl / 100  # $1 per trade base
+            
+            # Add TOTAL row
+            table_data.append([
+                "TOTAL",
+                str(total_trades),
+                f"{total_winrate:.1f}%",
+                f"{total_pnl:.2f}%",
+                f"${total_pnl_usd:.2f}"
+            ])
+            
+            # Update table at T6:X12 (7 rows: header + 5 strategies + TOTAL)
+            self.sheet.update('T6:X12', table_data)
+            
+            # Format the stats table
+            self._format_stats_table()
             
             logger.info(f"📊 Stats updated: {total_trades} trades, PnL: {total_pnl:.2f}%, WR: {total_winrate:.1f}%")
             
@@ -1129,7 +1172,7 @@ class GoogleSheetsClient:
             logger.error(f"Error updating stats table: {e}")
     
     def _format_stats_table(self):
-        """Format the statistics table at T6:X11."""
+        """Format the statistics table at T6:X12 (including TOTAL row)."""
         try:
             sheet_id = self.sheet.id
             
@@ -1173,13 +1216,33 @@ class GoogleSheetsClient:
                         "fields": "userEnteredFormat(textFormat)"
                     }
                 },
-                # Add borders
+                # TOTAL row with bold and background (Row 12)
+                {
+                    "repeatCell": {
+                        "range": {
+                            "sheetId": sheet_id,
+                            "startRowIndex": 11,  # Row 12 (0-indexed)
+                            "endRowIndex": 12,
+                            "startColumnIndex": 19,  # Column T
+                            "endColumnIndex": 24   # Column X
+                        },
+                        "cell": {
+                            "userEnteredFormat": {
+                                "backgroundColor": {"red": 0.9, "green": 0.95, "blue": 0.9},
+                                "textFormat": {"bold": True},
+                                "horizontalAlignment": "CENTER"
+                            }
+                        },
+                        "fields": "userEnteredFormat(backgroundColor,textFormat,horizontalAlignment)"
+                    }
+                },
+                # Add borders (now includes row 12)
                 {
                     "updateBorders": {
                         "range": {
                             "sheetId": sheet_id,
                             "startRowIndex": 5,
-                            "endRowIndex": 11,
+                            "endRowIndex": 12,  # Changed from 11 to 12
                             "startColumnIndex": 19,
                             "endColumnIndex": 24
                         },
@@ -1217,6 +1280,81 @@ class GoogleSheetsClient:
         closed = self._closed_trades.copy()
         self._closed_trades = []  # Clear after getting
         return closed
+    
+    async def fix_all_false_checkboxes(self):
+        """
+        Fix all rows that have text 'FALSE' in End Trade column (N).
+        Convert them to proper checkbox with FALSE boolean value.
+        """
+        if not self._connected or not self.sheet:
+            logger.warning("Sheet not connected")
+            return 0
+            
+        try:
+            all_data = self.sheet.get_all_values()
+            sheet_id = self.sheet.id
+            fixed_count = 0
+            rows_to_fix = []
+            
+            # First, find all rows that need fixing
+            for i, row in enumerate(all_data[5:], start=6):  # Skip headers (row 5)
+                if len(row) >= 14:
+                    end_trade_value = row[13] if len(row) > 13 else ""  # Column N
+                    
+                    # Check if it's text "FALSE" instead of checkbox
+                    if end_trade_value == "FALSE" or end_trade_value == "false":
+                        rows_to_fix.append(i)
+            
+            if not rows_to_fix:
+                logger.info("✅ No FALSE text found, all checkboxes OK")
+                return 0
+            
+            logger.info(f"🔧 Found {len(rows_to_fix)} rows to fix...")
+            
+            # Fix each row with delay to avoid quota
+            for idx, row_num in enumerate(rows_to_fix, 1):
+                try:
+                    # Add checkbox validation
+                    requests = [{
+                        "setDataValidation": {
+                            "range": {
+                                "sheetId": sheet_id,
+                                "startRowIndex": row_num-1,
+                                "endRowIndex": row_num,
+                                "startColumnIndex": 13,
+                                "endColumnIndex": 14
+                            },
+                            "rule": {
+                                "condition": {"type": "BOOLEAN"},
+                                "showCustomUi": True
+                            }
+                        }
+                    }]
+                    
+                    self.sheet.spreadsheet.batch_update({"requests": requests})
+                    
+                    # Update cell to FALSE boolean
+                    self.sheet.update_acell(f'N{row_num}', False)
+                    
+                    fixed_count += 1
+                    logger.info(f"  ✅ Fixed row {row_num} ({idx}/{len(rows_to_fix)})")
+                    
+                    # Delay to avoid quota (every 5 rows)
+                    if idx % 5 == 0:
+                        logger.info(f"  ⏳ Pausing 2s to avoid quota...")
+                        await asyncio.sleep(2)
+                    
+                except Exception as e:
+                    logger.error(f"  ❌ Failed row {row_num}: {e}")
+                    # Continue with next row even if this fails
+                    continue
+            
+            logger.info(f"✅ Fixed {fixed_count}/{len(rows_to_fix)} rows")
+            return fixed_count
+            
+        except Exception as e:
+            logger.error(f"Error fixing checkboxes: {e}")
+            return 0
 
 
 # Singleton instance

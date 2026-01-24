@@ -117,7 +117,7 @@ class IETradeConfig:
     ENTRY_FVG_LEVEL: float = 0.5
     
     # Minimum Risk:Reward ratio to TP1
-    MIN_RR_RATIO: float = 1.5  # 1:1.5 minimum (relaxed for volatile market)
+    MIN_RR_RATIO: float = 1.0  # 1:1 minimum (relaxed for more setups)
     
     # ==================== POSITION MANAGEMENT ====================
     

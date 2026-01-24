@@ -1430,26 +1430,44 @@ class AlertManager:
                         checklist_score=checklist_str
                     )
                     
-                    sheet_row = await self.sheets_client.log_trade(trade_record)
-                    
-                    # ========== ADD TO TRADE TRACKER ==========
-                    active_trade = ActiveTrade(
-                        trade_id=trade_id,
-                        symbol=result.symbol,
-                        direction=result.setup.direction,
-                        entry_price=levels.entry,
-                        stop_loss=levels.stop_loss,
-                        take_profit_1=levels.take_profit_1,
-                        take_profit_2=levels.take_profit_2,
-                        take_profit_3=levels.take_profit_3,
-                        leverage=levels.leverage,
-                        position_size=levels.position_size,
-                        sheet_row=sheet_row,
-                        chat_id=config.telegram.chat_id,
-                        message_id=message_id or 0  # Store message_id for reply
-                    )
-                    
-                    self.trade_tracker.add_trade(active_trade)
+                    # Try to log to sheet - if fails, skip trade tracking
+                    try:
+                        sheet_row = await self.sheets_client.log_trade(trade_record)
+                        
+                        # ========== ADD TO TRADE TRACKER ==========
+                        active_trade = ActiveTrade(
+                            trade_id=trade_id,
+                            symbol=result.symbol,
+                            direction=result.setup.direction,
+                            entry_price=levels.entry,
+                            stop_loss=levels.stop_loss,
+                            take_profit_1=levels.take_profit_1,
+                            take_profit_2=levels.take_profit_2,
+                            take_profit_3=levels.take_profit_3,
+                            leverage=levels.leverage,
+                            position_size=levels.position_size,
+                            sheet_row=sheet_row,
+                            chat_id=config.telegram.chat_id,
+                            message_id=message_id or 0  # Store message_id for reply
+                        )
+                        
+                        self.trade_tracker.add_trade(active_trade)
+                        logger.info(f"✅ Trade tracked: {result.symbol} @ row {sheet_row}")
+                        
+                    except Exception as sheet_error:
+                        # Sheet log failed - alert user but don't track trade
+                        logger.error(f"⚠️ Sheet log failed for {result.symbol}: {sheet_error}")
+                        logger.error(f"   Alert sent but NOT TRACKED in sheet/tracker")
+                        
+                        # Optionally send warning to user
+                        try:
+                            await self.telegram.send_message(
+                                f"⚠️ CẢNH BÁO: {result.symbol} alert đã gửi nhưng KHÔNG LOG VÔ SHEET\n"
+                                f"Lỗi: Quota exceeded - quá nhiều write request\n"
+                                f"Trade này KHÔNG được theo dõi tự động"
+                            )
+                        except:
+                            pass
             
             # Cooldown
             await self.redis.set_cooldown(

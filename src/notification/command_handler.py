@@ -65,6 +65,7 @@ class TelegramCommandHandler:
         app.add_handler(CommandHandler("help", self.cmd_help))
         app.add_handler(CommandHandler("start", self.cmd_help))
         app.add_handler(CommandHandler("endall", self.cmd_endall))
+        app.add_handler(CommandHandler("fixcb", self.cmd_fix_checkboxes))
         
         # Set commands for menu
         commands = [
@@ -78,6 +79,7 @@ class TelegramCommandHandler:
             BotCommand("news", "Economic calendar"),
             BotCommand("session", "Trading sessions status"),
             BotCommand("endall", "End all open trades"),
+            BotCommand("fixcb", "Fix FALSE text to checkboxes"),
             BotCommand("help", "Show help"),
         ]
         
@@ -588,4 +590,30 @@ Position Size: Diamond $2, Gold $1
             
         except Exception as e:
             logger.error(f"Error in /endall: {e}")
+            await update.message.reply_text(f"❌ Error: {e}")
+    
+    async def cmd_fix_checkboxes(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Fix all 'FALSE' text to proper checkboxes in Google Sheets."""
+        try:
+            # Get sheets client from alert manager
+            sheets_client = getattr(self.alert_manager, 'sheets_client', None)
+            
+            if not sheets_client:
+                await update.message.reply_text("❌ Google Sheets not connected")
+                return
+            
+            await update.message.reply_text("⏳ Fixing FALSE text → checkboxes...")
+            
+            # Fix all checkboxes
+            fixed_count = await sheets_client.fix_all_false_checkboxes()
+            
+            if fixed_count > 0:
+                msg = f"✅ Fixed {fixed_count} rows\n\n📝 All 'FALSE' text converted to checkboxes"
+            else:
+                msg = "✅ No issues found\n\n📝 All rows already have proper checkboxes"
+            
+            await update.message.reply_text(msg)
+            
+        except Exception as e:
+            logger.error(f"Error in /fixcb: {e}")
             await update.message.reply_text(f"❌ Error: {e}")
