@@ -65,10 +65,16 @@ class BiasManager:
     
     The bias determines whether we look for LONG or SHORT setups.
     Must be confirmed by user before scanning starts.
+    
+    Now with Redis persistence - bias survives bot restart!
     """
     
-    def __init__(self, config: IETradeConfig = DEFAULT_CONFIG):
+    # Redis key for bias persistence
+    REDIS_KEY = "ie_trade:daily_bias"
+    
+    def __init__(self, config: IETradeConfig = DEFAULT_CONFIG, redis_client=None):
         self.config = config
+        self.redis = redis_client  # Optional Redis for persistence
         self._state = BiasState(
             bias=DailyBias.NONE,
             set_at=None,
@@ -77,6 +83,69 @@ class BiasManager:
         )
         self._reminder_sent_today = False
         self._last_reminder_date: Optional[datetime] = None
+    
+    async def load_from_redis(self) -> bool:
+        """Load bias from Redis on startup. Returns True if loaded."""
+        if not self.redis:
+            return False
+        
+        try:
+            # Use get_json from our RedisClient wrapper
+            bias_data = await self.redis.get_json(self.REDIS_KEY)
+            if not bias_data:
+                logger.info("🎯 IE Bias: No saved bias found in Redis")
+                return False
+            
+            # Parse expires_at
+            expires_at = datetime.fromisoformat(bias_data["expires_at"]) if bias_data.get("expires_at") else None
+            
+            # Check if expired
+            if expires_at and datetime.utcnow() > expires_at:
+                logger.info("🎯 IE Bias: Saved bias has expired")
+                await self.redis.delete(self.REDIS_KEY)
+                return False
+            
+            # Restore state
+            self._state = BiasState(
+                bias=DailyBias(bias_data["bias"]),
+                set_at=datetime.fromisoformat(bias_data["set_at"]) if bias_data.get("set_at") else None,
+                set_by=bias_data.get("set_by", "restored"),
+                expires_at=expires_at
+            )
+            
+            remaining = self._state.hours_remaining
+            logger.info(f"🎯 IE Bias RESTORED from Redis: {self._state.bias.value}, expires in {remaining:.1f}h")
+            return True
+            
+        except Exception as e:
+            logger.error(f"🎯 IE Bias: Failed to load from Redis: {e}")
+            return False
+    
+    async def _save_to_redis(self) -> None:
+        """Save current bias to Redis for persistence."""
+        if not self.redis:
+            return
+        
+        try:
+            if not self._state.is_active:
+                # Delete key if no active bias
+                await self.redis.delete(self.REDIS_KEY)
+                return
+            
+            bias_data = {
+                "bias": self._state.bias.value,
+                "set_at": self._state.set_at.isoformat() if self._state.set_at else None,
+                "set_by": self._state.set_by,
+                "expires_at": self._state.expires_at.isoformat() if self._state.expires_at else None
+            }
+            
+            # Set with TTL = bias expiry time + 1 hour buffer
+            ttl = int(self._state.hours_remaining * 3600) + 3600
+            await self.redis.set_json(self.REDIS_KEY, bias_data, expire=ttl)
+            logger.debug(f"🎯 IE Bias saved to Redis, TTL={ttl}s")
+            
+        except Exception as e:
+            logger.error(f"🎯 IE Bias: Failed to save to Redis: {e}")
     
     @property
     def current_bias(self) -> DailyBias:
@@ -117,6 +186,15 @@ class BiasManager:
         )
         
         logger.info(f"🎯 IE Bias set to {bias.value} by {set_by}, expires at {expires_at}")
+        
+        # Save to Redis for persistence (async in background)
+        import asyncio
+        try:
+            loop = asyncio.get_running_loop()
+            loop.create_task(self._save_to_redis())
+        except RuntimeError:
+            # No running loop - will save on next async operation
+            pass
         
         return self._state
     

@@ -100,10 +100,12 @@ class IEScanner:
         config: IETradeConfig = DEFAULT_CONFIG,
         fetch_candles: Optional[Callable] = None,
         send_alert: Optional[Callable] = None,
-        log_to_sheet: Optional[Callable] = None
+        log_to_sheet: Optional[Callable] = None,
+        redis_client = None  # For bias persistence
     ):
         self.config = config
-        self.bias_manager = BiasManager(config)
+        self.redis_client = redis_client
+        self.bias_manager = BiasManager(config, redis_client=redis_client)
         self.fvg_detector = FVGDetector(config)
         self.mss_detector = MSSDetector(config)
         self.entry_calculator = EntryCalculator(config)
@@ -131,6 +133,12 @@ class IEScanner:
         """Start the scanner"""
         if self._running:
             return
+        
+        # Try to load bias from Redis on startup
+        if self.redis_client:
+            loaded = await self.bias_manager.load_from_redis()
+            if loaded:
+                logger.info(f"🎯 IE Scanner: Bias restored from previous session")
         
         self._running = True
         self._scan_task = asyncio.create_task(self._scan_loop())
@@ -437,6 +445,7 @@ def create_ie_scanner(
     rest_client,  # BingX REST client
     telegram_bot,  # Telegram bot instance (Application object)
     sheets_client = None,  # Optional Google Sheets client
+    redis_client = None,  # Optional Redis for bias persistence
     config: IETradeConfig = DEFAULT_CONFIG
 ) -> IEScanner:
     """
@@ -446,6 +455,7 @@ def create_ie_scanner(
         rest_client: BingX REST API client
         telegram_bot: Telegram Application object
         sheets_client: Optional Google Sheets client
+        redis_client: Optional Redis client for bias persistence
         config: IE Trade configuration
         
     Returns:
@@ -487,5 +497,6 @@ def create_ie_scanner(
         config=config,
         fetch_candles=fetch_candles,
         send_alert=send_alert,
-        log_to_sheet=log_to_sheet if sheets_client else None
+        log_to_sheet=log_to_sheet if sheets_client else None,
+        redis_client=redis_client  # Pass for bias persistence
     )

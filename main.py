@@ -134,7 +134,8 @@ class Bot:
                 self.ie_trade_runner = await start_ie_trade(
                     rest_client=self.alert_manager.rest_client,
                     telegram_bot=self.telegram_app,
-                    sheets_client=getattr(self.alert_manager, 'sheets_client', None)
+                    sheets_client=getattr(self.alert_manager, 'sheets_client', None),
+                    redis_client=getattr(self.alert_manager, 'redis', None)  # For bias persistence
                 )
                 logger.info("✅ IE Trade module initialized")
             except Exception as e:

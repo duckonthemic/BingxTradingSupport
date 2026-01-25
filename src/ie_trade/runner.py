@@ -72,11 +72,12 @@ class IETradeRunner:
         logger.info("=" * 50)
         
         try:
-            # Create scanner (not async)
+            # Create scanner with Redis for bias persistence
             self.scanner = create_ie_scanner(
                 rest_client=self.rest_client,
                 telegram_bot=self.telegram_bot,
                 sheets_client=self.sheets_client,
+                redis_client=self.redis_client,  # For bias persistence
                 config=self.config
             )
             
