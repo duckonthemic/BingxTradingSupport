@@ -82,10 +82,20 @@ class IESheetLogger:
             # Create TradeRecord from IE setup
             from ..storage.sheets_client import TradeRecord
             
+            # Calculate leverage based on asset class (same as other strategies)
+            major_coins = ("BTC-USDT", "ETH-USDT", "SOL-USDT")
+            gold_symbols = ("XAUT-USDT", "PAXG-USDT")
+            
+            if setup.symbol in gold_symbols:
+                leverage = 500
+            elif setup.symbol in major_coins:
+                leverage = 100
+            else:
+                leverage = 15  # Altcoins
+            
             # Format note with IE trade info
             note_parts = [
                 "IE trade",
-                f"KZ:{setup.kill_zone}" if setup.kill_zone else "",
                 f"Bias:{setup.daily_bias}" if setup.daily_bias else "",
                 f"R:R={setup.rr_ratio_1:.1f}"
             ]
@@ -97,7 +107,7 @@ class IESheetLogger:
                 date=setup.timestamp.strftime("%Y-%m-%d %H:%M"),
                 coin=setup.symbol.replace("-USDT", ""),
                 signal=setup.direction,
-                leverage=10,  # Default leverage for IE trades
+                leverage=leverage,
                 entry=setup.entry_price,
                 stoploss=setup.stop_loss,
                 take_profit=setup.take_profit_1,
