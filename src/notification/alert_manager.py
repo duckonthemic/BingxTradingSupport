@@ -1136,26 +1136,7 @@ class AlertManager:
                 else:
                     logger.info(f"✅ SHORT allowed: {coin.symbol} {signal_tier.value} in {regime} regime")
             
-            # ========== FIXED POSITION SIZE + DYNAMIC LEVERAGE ==========
-            # Fixed $2 position size with leverage based on coin volume
-            if optimized:
-                # Get coin 24h volume from indicators
-                coin_volume = getattr(coin, 'volume_24h', 0) or 0
-                
-                # Determine leverage based on coin size
-                if coin_volume < config.trading.small_cap_max_volume:
-                    # Small cap: 10-20x leverage
-                    leverage = config.trading.leverage_small_cap
-                elif coin_volume > config.trading.large_cap_min_volume:
-                    # Large cap (BTC, ETH, etc): 100x leverage  
-                    leverage = config.trading.leverage_large_cap
-                else:
-                    # Mid cap: ~50x leverage
-                    leverage = config.trading.leverage_mid_cap
-                
-                # Fixed position size from config
-                optimized.position_size = config.trading.fixed_position_usd
-                optimized.leverage = leverage
+            # Note: Position size and leverage are already set by trade_filter.calculate_optimized_levels()
             
             # Apply dynamic stoploss for Pump Fade / counter-trend
             if confidence.use_dynamic_sl and confidence.dynamic_sl_price > 0:
@@ -1182,7 +1163,7 @@ class AlertManager:
             )
             
         except Exception as e:
-            logger.debug(f"Scan error {coin.symbol}: {e}")
+            logger.info(f"⚠️ Scan error {coin.symbol}: {e}")
             return ScanResult(symbol=coin.symbol, success=False, error=str(e))
     
     async def _fetch_klines_safe(self, symbol: str, interval: str, limit: int):
