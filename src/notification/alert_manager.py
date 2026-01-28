@@ -582,8 +582,8 @@ class AlertManager:
             except Exception as e:
                 logger.error(f"Sheets monitor error: {e}")
             
-            # Check every 2 minutes
-            await asyncio.sleep(120)
+            # Check every 5 minutes (reduced from 2 min to avoid quota)
+            await asyncio.sleep(300)
         
         while self._running:
             if not self._paused:
@@ -795,14 +795,8 @@ class AlertManager:
             f"Strategies: {len(strategies_sent)} | Rate: {rate_status['message']} | BTC: {btc_status}"
         )
         
-        # Update existing trades if no new alerts sent
-        if sent_count == 0 and self.sheets_client._connected:
-            try:
-                updated = await self.sheets_client.check_and_update_trades(self.rest_client)
-                if updated > 0:
-                    logger.info(f"📊 Updated {updated} open trades")
-            except Exception as e:
-                logger.debug(f"Error updating trades: {e}")
+        # Note: Sheets trade updates moved to dedicated _run_sheets_monitor task
+        # to avoid quota exceeded errors (runs every 5 min instead of every scan)
     
     async def scan_single_coin(self, symbol: str):
         """
@@ -1100,15 +1094,17 @@ class AlertManager:
                             confidence_points=confidence_points
                         )
                 elif market_state == "WARNING":
-                    if signal_tier not in [SignalTier.DIAMOND, SignalTier.GOLD]:
-                        logger.info(f"🚫 SHORT blocked: {coin.symbol} is {signal_tier.value} but WARNING state requires GOLD+")
+                    # In WARNING (bearish): Allow SILVER+ for SHORT (relaxed for bear market)
+                    # Previously required GOLD+, now allow SILVER (score>=40) too
+                    if signal_tier == SignalTier.REJECT:
+                        logger.info(f"🚫 SHORT blocked: {coin.symbol} is REJECT tier (score<40) - minimum SILVER needed")
                         return ScanResult(
                             symbol=coin.symbol,
                             success=True,
                             indicators=indicators,
                             setup=best_setup,
                             filter_result=FilterResult.REJECT_LOW_RR,
-                            filter_reason=f"Market State: WARNING - Only Diamond/Gold SHORT allowed",
+                            filter_reason=f"Market State: WARNING - Minimum SILVER tier needed for SHORT",
                             checklist_score=checklist,
                             signal_grade=signal_grade,
                             confidence_score=confidence,
@@ -1116,7 +1112,7 @@ class AlertManager:
                             confidence_points=confidence_points
                         )
                     else:
-                        logger.info(f"✅ Diamond SHORT allowed in {market_state}: {coin.symbol}")
+                        logger.info(f"✅ {signal_tier.value} SHORT allowed in {market_state}: {coin.symbol}")
                 
                 # Apply Market Regime filter (EMA200-based)
                 min_tier_for_short = self.risk_manager.btc_filter.get_short_allowed_tier()

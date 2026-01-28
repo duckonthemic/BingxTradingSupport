@@ -169,6 +169,10 @@ class GoogleSheetsClient:
                 
             self._connected = True
             logger.info(f"✅ Google Sheets connected: {spreadsheet.title}")
+            
+            # Sync account balance on connect (recalculate from trades and update G2)
+            await self.sync_account_balance()
+            
             return True
             
         except Exception as e:
@@ -193,8 +197,8 @@ class GoogleSheetsClient:
             self.sheet.update('E3', 'Winrate')
             
             # Account Balance display (next to Winrate)
-            self.sheet.update('G2', f'${self.account_balance:.2f}')
-            self.sheet.update('G3', 'Balance')
+            self.sheet.update_acell('G2', f'${self.account_balance:.2f}')
+            self.sheet.update_acell('G3', 'Balance')
             
             # Info banner (moved to H column)
             
@@ -1028,8 +1032,8 @@ class GoogleSheetsClient:
                 
                 self.account_balance = self.initial_balance + total_pnl_usd
             
-            # Update balance in sheet (G2)
-            self.sheet.update('G2', f'${self.account_balance:.2f}')
+            # Update balance in sheet (G2) - use update_acell for single cell
+            self.sheet.update_acell('G2', f'${self.account_balance:.2f}')
             logger.info(f"💰 Account Balance updated: ${self.account_balance:.2f}")
             
             return self.account_balance
@@ -1037,6 +1041,17 @@ class GoogleSheetsClient:
         except Exception as e:
             logger.error(f"Error updating account balance: {e}")
             return self.account_balance
+    
+    async def sync_account_balance(self) -> float:
+        """
+        Sync account balance from sheet data on startup.
+        Recalculates total PnL from all closed trades and updates G2.
+        
+        Returns:
+            Current account balance
+        """
+        logger.info("🔄 Syncing account balance from sheet...")
+        return await self.update_account_balance(0.0)  # 0 triggers full recalc
     
     async def end_all_trades(self) -> Dict:
         """
