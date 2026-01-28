@@ -43,10 +43,11 @@ class MarketRegime(Enum):
     NEUTRAL = "NEUTRAL"    # Near EMA200 - normal rules
 
 
-# Risk thresholds
-DAILY_MAX_LOSS_PCT = 3.0      # 3% daily max loss -> PAUSE 24h
-WEEKLY_MAX_LOSS_PCT = 10.0    # 10% weekly max loss -> STOP
-BTC_DUMP_THRESHOLD_1H = -1.0  # -1% in 1h = dumping
+# Risk thresholds (Updated per backtest optimization)
+DAILY_MAX_LOSS_PCT = 15.0      # 15% daily max loss -> PAUSE 24h
+WEEKLY_MAX_LOSS_PCT = 25.0     # 25% weekly max loss -> REST WEEK
+CONSECUTIVE_LOSS_PAUSE = 3     # 3 consecutive losses -> PAUSE and review
+BTC_DUMP_THRESHOLD_1H = -1.0   # -1% in 1h = dumping
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -391,29 +392,37 @@ class CircuitBreaker:
     """
     Circuit Breaker - Stop trading when max loss reached.
     
-    Rules:
-    1. Daily Max Loss > 3% → PAUSE 24 hours
-    2. Weekly Max Loss > 10% → STOP (manual intervention)
+    Rules (Updated):
+    1. Daily Max Loss > 15% → PAUSE 24 hours
+    2. Weekly Max Loss > 25% → REST WEEK (manual intervention)
+    3. 3 Consecutive Losses → PAUSE and review
     """
     
     def __init__(
         self,
         daily_max_loss_pct: float = DAILY_MAX_LOSS_PCT,
         weekly_max_loss_pct: float = WEEKLY_MAX_LOSS_PCT,
+        consecutive_loss_pause: int = CONSECUTIVE_LOSS_PAUSE,
     ):
         self.daily_max_loss_pct = daily_max_loss_pct
         self.weekly_max_loss_pct = weekly_max_loss_pct
+        self.consecutive_loss_pause = consecutive_loss_pause
         
         self.state = CircuitBreakerState.CLOSED
         self.daily_pnl_pct: float = 0.0
         self.weekly_pnl_pct: float = 0.0
         self.resume_at: Optional[datetime] = None
+        self.pause_reason: str = ""
         
         # PnL tracking
         self.daily_trades: List[float] = []  # PnL per trade today
         self.weekly_trades: List[float] = []  # PnL per trade this week
         self.last_daily_reset: datetime = datetime.now().replace(hour=0, minute=0, second=0)
         self.last_weekly_reset: datetime = datetime.now()
+        
+        # Consecutive loss tracking
+        self.consecutive_losses: int = 0
+        self.last_trade_was_loss: bool = False
     
     def record_trade_pnl(self, pnl_pct: float):
         """Record trade PnL for tracking."""
@@ -424,6 +433,14 @@ class CircuitBreaker:
         
         self.daily_pnl_pct = sum(self.daily_trades)
         self.weekly_pnl_pct = sum(self.weekly_trades)
+        
+        # Track consecutive losses
+        if pnl_pct < 0:
+            self.consecutive_losses += 1
+            self.last_trade_was_loss = True
+        else:
+            self.consecutive_losses = 0  # Reset on win
+            self.last_trade_was_loss = False
         
         # Check thresholds
         self._check_thresholds()
@@ -438,11 +455,13 @@ class CircuitBreaker:
             self.daily_trades = []
             self.daily_pnl_pct = 0.0
             self.last_daily_reset = today_midnight
+            self.consecutive_losses = 0  # Reset consecutive on new day
             
             # Auto-resume after 24h pause
             if self.state == CircuitBreakerState.OPEN and self.resume_at:
                 if now >= self.resume_at:
                     self.state = CircuitBreakerState.HALF_OPEN
+                    self.pause_reason = ""
                     logger.info("🟡 Circuit Breaker: HALF-OPEN - testing recovery")
         
         # Weekly reset on Monday
@@ -457,25 +476,37 @@ class CircuitBreaker:
     
     def _check_thresholds(self):
         """Check if circuit breaker should trip."""
-        # Weekly threshold - STOP completely
+        # Weekly threshold - STOP completely (25%)
         if self.weekly_pnl_pct <= -self.weekly_max_loss_pct:
             self.state = CircuitBreakerState.OPEN
             self.resume_at = None  # Manual intervention required
+            self.pause_reason = "WEEKLY_LOSS"
             logger.warning(
                 f"🔴 CIRCUIT BREAKER OPEN: Weekly loss {self.weekly_pnl_pct:.2f}% "
-                f"exceeded {self.weekly_max_loss_pct}% - MANUAL INTERVENTION REQUIRED"
+                f"exceeded {self.weekly_max_loss_pct}% - REST WEEK REQUIRED"
             )
             return
         
-        # Daily threshold - PAUSE 24h
+        # Daily threshold - PAUSE 24h (15%)
         if self.daily_pnl_pct <= -self.daily_max_loss_pct:
             self.state = CircuitBreakerState.OPEN
             self.resume_at = datetime.now() + timedelta(hours=24)
+            self.pause_reason = "DAILY_LOSS"
             logger.warning(
                 f"🟠 CIRCUIT BREAKER OPEN: Daily loss {self.daily_pnl_pct:.2f}% "
                 f"exceeded {self.daily_max_loss_pct}% - PAUSED until {self.resume_at}"
             )
             return
+        
+        # Consecutive losses - PAUSE 1 hour for review (3 losses)
+        if self.consecutive_losses >= self.consecutive_loss_pause:
+            self.state = CircuitBreakerState.OPEN
+            self.resume_at = datetime.now() + timedelta(hours=1)
+            self.pause_reason = "CONSECUTIVE_LOSSES"
+            logger.warning(
+                f"🟡 CIRCUIT BREAKER OPEN: {self.consecutive_losses} consecutive losses "
+                f"- PAUSED for 1 hour to review setups"
+            )
     
     def is_trading_allowed(self) -> bool:
         """Check if trading is allowed."""
@@ -660,8 +691,8 @@ class RiskManager:
     
     def __init__(
         self,
-        account_balance: float = 1000.0,
-        risk_per_trade_pct: float = 1.0,
+        account_balance: float = 25.0,   # User's actual capital
+        risk_per_trade_pct: float = 4.0,  # $1 risk on $25 = 4%
     ):
         self.btc_filter = BTCCorrelationFilter()
         self.position_sizer = DynamicPositionSizer(

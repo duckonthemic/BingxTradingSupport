@@ -1,0 +1,40 @@
+{
+  "period_days": 8,
+  "start_date": "2026-01-20",
+  "end_date": "2026-01-28",
+  "initial_capital": 25.0,
+  "final_capital": 27.33836027932135,
+  "total_pnl": 2.3383602793213494,
+  "total_pnl_pct": 9.353441117285398,
+  "total_trades": 80,
+  "win_rate": 27.500000000000004,
+  "max_drawdown": 4.689722757722578,
+  "trap_sfp": {
+    "trades": 0,
+    "win_rate": 0.0,
+    "pnl": 0.0
+  },
+  "trap_liq": {
+    "trades": 0,
+    "win_rate": 0.0,
+    "pnl": 0.0
+  },
+  "standard": {
+    "trades": 80,
+    "win_rate": 27.500000000000004,
+    "pnl": 2.3383602793213494
+  },
+  "direction": {
+    "long": {
+      "trades": 49,
+      "wr": 16.3265306122449,
+      "pnl": 0.07185860074657086
+    },
+    "short": {
+      "trades": 31,
+      "wr": 45.16129032258064,
+      "pnl": 2.2665016785747785
+    }
+  },
+  "blocked_trades": 0
+}

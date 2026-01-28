@@ -103,7 +103,8 @@ class GoogleSheetsClient:
         self,
         credentials_path: str = "credentials.json",
         spreadsheet_id: Optional[str] = None,
-        spreadsheet_name: str = "Trading Journal"
+        spreadsheet_name: str = "Trading Journal",
+        initial_balance: float = 25.0  # User's starting capital
     ):
         self.credentials_path = credentials_path
         self.spreadsheet_id = spreadsheet_id or os.getenv("GOOGLE_SHEET_ID", "")
@@ -111,6 +112,10 @@ class GoogleSheetsClient:
         self.client: Optional[gspread.Client] = None
         self.sheet: Optional[gspread.Worksheet] = None
         self._connected = False
+        
+        # Account balance tracking (compound growth, no cash out)
+        self.initial_balance = initial_balance
+        self.account_balance = initial_balance  # Updated after each trade
         
     async def connect(self) -> bool:
         """Connect to Google Sheets."""
@@ -187,9 +192,11 @@ class GoogleSheetsClient:
             self.sheet.update('E2', '=IFERROR(TEXT(COUNTIF(I6:I1000,">0%")/SUMPRODUCT(--(LEN(I6:I1000)>0),--(ISNUMBER(SEARCH("%",I6:I1000)))),"0.0%"),"0.0%")')
             self.sheet.update('E3', 'Winrate')
             
-            # Info banner
-            self.sheet.update('F1', 'Trade thi sẽ có kèo thắng kèo thua! Luôn đảm bảo đi đều lệnh + Số tiền mỗi lệnh bằng nhau')
-            self.sheet.update('F2', 'Các kèo chia sẻ free, nên để mn chơi đỡ tốn phí giao dịch nhất')
+            # Account Balance display (next to Winrate)
+            self.sheet.update('G2', f'${self.account_balance:.2f}')
+            self.sheet.update('G3', 'Balance')
+            
+            # Info banner (moved to H column)
             
             # === HEADERS (Row 5) ===
             self.sheet.update('A5:R5', [self.HEADERS])
@@ -416,20 +423,29 @@ class GoogleSheetsClient:
         try:
             sheet_id = self.sheet.id
             
-            # First set the cell value to FALSE (boolean)
-            self.sheet.update_acell(f'N{row}', False)
-            
-            # Then add data validation for checkbox
-            requests = [{
-                "setDataValidation": {
-                    "range": {"sheetId": sheet_id, "startRowIndex": row-1, "endRowIndex": row, 
-                              "startColumnIndex": 13, "endColumnIndex": 14},
-                    "rule": {
-                        "condition": {"type": "BOOLEAN"},
-                        "showCustomUi": True
+            # Use batch_update to set BOTH validation AND value in one request
+            # This ensures proper checkbox instead of FALSE text
+            requests = [
+                {
+                    "repeatCell": {
+                        "range": {
+                            "sheetId": sheet_id, 
+                            "startRowIndex": row - 1, 
+                            "endRowIndex": row,
+                            "startColumnIndex": 13,  # Column N
+                            "endColumnIndex": 14
+                        },
+                        "cell": {
+                            "dataValidation": {
+                                "condition": {"type": "BOOLEAN"},
+                                "showCustomUi": True
+                            },
+                            "userEnteredValue": {"boolValue": False}  # Unchecked
+                        },
+                        "fields": "dataValidation,userEnteredValue"
                     }
                 }
-            }]
+            ]
             self.sheet.spreadsheet.batch_update({"requests": requests})
             logger.debug(f"✅ Checkbox added to row {row}")
         except Exception as e:
@@ -569,6 +585,11 @@ class GoogleSheetsClient:
             
             # Format PnL cell based on result
             self._format_pnl_cell(row, pnl_percent)
+            
+            # Update account balance (compound growth, $1 position size)
+            position_size = 1.0  # $1 per trade
+            pnl_usd = position_size * pnl_percent / 100
+            await self.update_account_balance(pnl_usd)
             
             logger.info(f"📊 Trade updated: row {row}, PnL={pnl_percent:.2f}%, Status={status}")
             return True
@@ -969,9 +990,58 @@ class GoogleSheetsClient:
             logger.error(f"Error getting stats: {e}")
             return {"total": 0, "wins": 0, "losses": 0, "winrate": 0}
     
+    async def update_account_balance(self, pnl_usd: float = 0.0) -> float:
+        """
+        Update account balance after trade and write to sheet.
+        
+        Args:
+            pnl_usd: PnL in USD from the last trade (positive for profit, negative for loss)
+                     If 0, recalculates from all trades in sheet.
+        
+        Returns:
+            Updated account balance
+        """
+        if not self._connected or not self.sheet:
+            return self.account_balance
+            
+        try:
+            if pnl_usd != 0:
+                # Direct update from single trade
+                self.account_balance += pnl_usd
+            else:
+                # Recalculate from all trades in sheet
+                all_data = self.sheet.get_all_values()
+                total_pnl_usd = 0.0
+                position_size = 1.0  # $1 per trade
+                
+                for row in all_data[5:]:  # Skip headers (row 5)
+                    # Only count closed trades (Status = TP or SL in column K, index 10)
+                    if len(row) > 10 and row[10] in ["TP", "SL", "CLOSED"]:
+                        pnl_str = row[9].replace('%', '').strip() if len(row) > 9 else ""  # Column J (PnL%)
+                        try:
+                            pnl_percent = float(pnl_str)
+                            # Calculate USD PnL: position_size * pnl_percent / 100
+                            pnl_usd = position_size * pnl_percent / 100
+                            total_pnl_usd += pnl_usd
+                        except ValueError:
+                            pass
+                
+                self.account_balance = self.initial_balance + total_pnl_usd
+            
+            # Update balance in sheet (G2)
+            self.sheet.update('G2', f'${self.account_balance:.2f}')
+            logger.info(f"💰 Account Balance updated: ${self.account_balance:.2f}")
+            
+            return self.account_balance
+            
+        except Exception as e:
+            logger.error(f"Error updating account balance: {e}")
+            return self.account_balance
+    
     async def end_all_trades(self) -> Dict:
         """
         End all open trades (set End Trade = TRUE for all).
+        Uses batch updates with delays to avoid quota exceeded.
         
         Returns:
             Dict with count of trades ended and total PnL
@@ -1008,28 +1078,79 @@ class GoogleSheetsClient:
                     
                     trades_ended += 1
             
-            # Batch update all End Trade checkboxes
+            # Batch update in chunks of 10 with delays to avoid quota
             if rows_to_update:
-                batch_data = []
-                for row_num in rows_to_update:
-                    batch_data.append({
-                        'range': f'N{row_num}',
-                        'values': [[True]]
-                    })
-                self.sheet.batch_update(batch_data)
+                import asyncio
+                batch_size = 10
                 
-                # Also set Status to CLOSED if not already TP/SL
+                for i in range(0, len(rows_to_update), batch_size):
+                    chunk = rows_to_update[i:i+batch_size]
+                    
+                    # First, set checkbox validation for this chunk
+                    requests = []
+                    for row_num in chunk:
+                        requests.append({
+                            "repeatCell": {
+                                "range": {
+                                    "sheetId": self.sheet.id,
+                                    "startRowIndex": row_num - 1,
+                                    "endRowIndex": row_num,
+                                    "startColumnIndex": 13,  # Column N
+                                    "endColumnIndex": 14
+                                },
+                                "cell": {
+                                    "dataValidation": {
+                                        "condition": {"type": "BOOLEAN"}
+                                    },
+                                    "userEnteredValue": {"boolValue": True}
+                                },
+                                "fields": "dataValidation,userEnteredValue"
+                            }
+                        })
+                    
+                    try:
+                        self.sheet.spreadsheet.batch_update({"requests": requests})
+                        logger.info(f"✅ Ended trades rows {chunk[0]}-{chunk[-1]}")
+                    except Exception as batch_err:
+                        if "429" in str(batch_err) or "Quota" in str(batch_err):
+                            logger.warning(f"⏳ Quota limit, waiting 10s...")
+                            await asyncio.sleep(10)
+                            # Retry
+                            try:
+                                self.sheet.spreadsheet.batch_update({"requests": requests})
+                            except:
+                                pass
+                    
+                    # Delay between batches
+                    if i + batch_size < len(rows_to_update):
+                        await asyncio.sleep(2)
+                
+                # Update Status to CLOSED for non-TP/SL trades (batch)
+                await asyncio.sleep(2)
                 batch_status = []
                 for row_num in rows_to_update:
-                    row_data = all_data[row_num - 1]  # 0-indexed
+                    row_data = all_data[row_num - 1]
                     status = row_data[10] if len(row_data) > 10 else ""
                     if status.upper() not in ["TP", "SL"]:
                         batch_status.append({
                             'range': f'K{row_num}',
                             'values': [["CLOSED"]]
                         })
+                
+                # Update status in chunks too
                 if batch_status:
-                    self.sheet.batch_update(batch_status)
+                    for i in range(0, len(batch_status), batch_size):
+                        chunk = batch_status[i:i+batch_size]
+                        try:
+                            self.sheet.batch_update(chunk)
+                        except:
+                            await asyncio.sleep(5)
+                            try:
+                                self.sheet.batch_update(chunk)
+                            except:
+                                pass
+                        if i + batch_size < len(batch_status):
+                            await asyncio.sleep(2)
             
             logger.info(f"✅ Ended {trades_ended} trades, Total PnL: {total_pnl:.2f}%")
             
