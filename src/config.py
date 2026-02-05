@@ -94,17 +94,47 @@ class RiskConfig:
 
 @dataclass 
 class TradingConfig:
-    """Trading size and leverage settings."""
+    """
+    Trading size and leverage settings - RISK OPTIMIZED v3.0
+    
+    Based on TradeHistory2 analysis:
+    - x500 leverage: -4463.7% PnL (DISASTER) => ELIMINATED
+    - x15 leverage: +2591.6% PnL => KEEP AS DEFAULT
+    - x100 leverage: +1410.7% PnL => CAP
+    """
     fixed_position_usd: float = float(os.getenv("FIXED_POSITION_USD", 1.0))  # $1 per trade (max)
     
-    # Leverage rules by type
-    min_leverage_trap: int = 300  # Vàng/bạc/chứng chỉ/quỹ bẫy: tối thiểu x300
-    min_leverage_top_trap: int = 100  # Top coin trap: tối thiểu x100
-    default_leverage: int = 15  # Default for normal trades
-    max_leverage: int = 50  # Max for altcoins
+    # === LEVERAGE CAPS (CRITICAL SAFETY RULES) ===
+    # ABSOLUTE MAX: x100 (NO x500 EVER - destroyed -4463% PnL)
+    absolute_max_leverage: int = 100
+    
+    # Default leverage by asset type
+    default_leverage: int = 15         # Altcoins (safest, +2591.6% PnL)
+    major_coin_leverage: int = 75      # BTC, ETH, SOL (reduced from 100)
+    gold_leverage: int = 100           # XAUT, PAXG (reduced from 500!)
+    index_leverage: int = 50           # Indices (NASDAQ, S&P500, etc.)
+    
+    # DEPRECATED - kept for compatibility
+    min_leverage_trap: int = 100       # Reduced from 300
+    min_leverage_top_trap: int = 75    # Reduced from 100
+    max_leverage: int = 100            # Hard cap (was 50 for altcoins only)
+    
     # Volume thresholds for leverage tiers
     small_cap_max_volume: float = float(os.getenv("SMALL_CAP_MAX_VOL", 50_000_000))  # $50M
     large_cap_min_volume: float = float(os.getenv("LARGE_CAP_MIN_VOL", 200_000_000))  # $200M
+    
+    # === CHECKLIST REQUIREMENTS ===
+    # Based on analysis: 3/3 checklist = +1455.6% PnL, 2/3 = -3471.4% PnL
+    long_min_checklist: int = 3        # LONG requires 3/3 checklist
+    short_min_checklist: int = 2       # SHORT works with 2/3+
+    
+    # === DIRECTION PREFERENCE ===
+    # LONG: 32.6% WR, -4339.4% PnL => RESTRICT
+    # SHORT: 57.9% WR, +2433.5% PnL => PREFER
+    prefer_short: bool = True
+    block_sfp_long: bool = True        # SFP LONG: -3194.3% PnL
+    block_ema_pullback_long: bool = True  # EMA_PULLBACK LONG: -995.5% PnL
+    block_bb_bounce_long: bool = True  # BB_BOUNCE LONG: -575.7% PnL
 
 
 @dataclass

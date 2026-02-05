@@ -928,7 +928,7 @@ class AlertManager:
             # Check BTC correlation for trade permission via RiskManager
             can_trade_allowed, can_trade_reason = self.risk_manager.can_trade(coin.symbol, direction.value)
             if not can_trade_allowed:
-                self.stats["filtered_by_btc_correlation"] += 1
+                self._stats["filtered_by_btc_correlation"] += 1
                 return ScanResult(
                     symbol=coin.symbol,
                     success=True,
@@ -936,6 +936,28 @@ class AlertManager:
                     setup=best_setup,
                     filter_result=FilterResult.REJECT_BTC_DUMP,
                     filter_reason=f"Risk: {can_trade_reason}"
+                )
+            
+            # ========== STRATEGY-DIRECTION VALIDATION v3.0 ==========
+            # Based on TradeHistory2 analysis:
+            # - SFP LONG: -3194.3% PnL => BLOCKED
+            # - EMA_PULLBACK LONG: -995.5% PnL => BLOCKED
+            # - BB_BOUNCE LONG: -575.7% PnL => BLOCKED
+            strat_dir_allowed, strat_dir_reason = self.trade_filter.validate_strategy_direction(
+                strategy=best_setup.strategy.value,
+                direction=best_setup.direction,
+                checklist_score=0  # Will check after scoring
+            )
+            if not strat_dir_allowed:
+                self._stats["filtered_by_strategy_direction"] = self._stats.get("filtered_by_strategy_direction", 0) + 1
+                logger.info(f"🚫 {coin.symbol}: {strat_dir_reason}")
+                return ScanResult(
+                    symbol=coin.symbol,
+                    success=True,
+                    indicators=indicators,
+                    setup=best_setup,
+                    filter_result=FilterResult.REJECT_MTF_TREND,
+                    filter_reason=f"Strategy-Direction Block: {strat_dir_reason}"
                 )
             
             # Check if this is a mean reversion strategy (skip MTF filter)
@@ -992,6 +1014,48 @@ class AlertManager:
                 setup_type=best_setup.strategy.value,
                 detected_direction=best_setup.direction
             )
+            
+            # ========== CHECKLIST VALIDATION v3.0 ==========
+            # Based on TradeHistory2:
+            # - 3/3 checklist: +1455.6% PnL, 56.1% WR (PROFITABLE)
+            # - 2/3 checklist: -3471.4% PnL, 46.6% WR (LOSS, except SHORT)
+            # - 1/3 checklist: -84.6% PnL, 30.8% WR (ALWAYS LOSS)
+            checklist_score_num = checklist.matched_count if hasattr(checklist, 'matched_count') else 0
+            min_checklist_required = self.trade_filter.get_checklist_requirements(best_setup.direction)
+            
+            if checklist_score_num < min_checklist_required:
+                self._stats["filtered_by_checklist"] = self._stats.get("filtered_by_checklist", 0) + 1
+                logger.info(f"🚫 {coin.symbol}: Checklist {checklist_score_num}/3 < {min_checklist_required}/3 required for {best_setup.direction}")
+                return ScanResult(
+                    symbol=coin.symbol,
+                    success=True,
+                    indicators=indicators,
+                    setup=best_setup,
+                    filter_result=FilterResult.REJECT_LOW_RR,
+                    filter_reason=f"Checklist {checklist_score_num}/3 - {best_setup.direction} requires {min_checklist_required}/3",
+                    checklist_score=checklist,
+                    signal_grade=SignalGrade.D_REJECT
+                )
+            
+            # Re-validate strategy-direction with checklist score (for CONDITIONAL strategies)
+            strat_dir_allowed, strat_dir_reason = self.trade_filter.validate_strategy_direction(
+                strategy=best_setup.strategy.value,
+                direction=best_setup.direction,
+                checklist_score=checklist_score_num
+            )
+            if not strat_dir_allowed:
+                self._stats["filtered_by_strategy_direction"] = self._stats.get("filtered_by_strategy_direction", 0) + 1
+                logger.info(f"🚫 {coin.symbol}: {strat_dir_reason} (checklist={checklist_score_num}/3)")
+                return ScanResult(
+                    symbol=coin.symbol,
+                    success=True,
+                    indicators=indicators,
+                    setup=best_setup,
+                    filter_result=FilterResult.REJECT_MTF_TREND,
+                    filter_reason=strat_dir_reason,
+                    checklist_score=checklist,
+                    signal_grade=SignalGrade.D_REJECT
+                )
             
             # Calculate Confidence Score (new v2.0)
             confidence = self.scoring_system.calculate_confidence(

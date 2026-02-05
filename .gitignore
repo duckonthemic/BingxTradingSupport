@@ -422,3 +422,4 @@ ie_trade_backtest_*.json
 # Keep assets
 !assets/
 !docs/images/
+TradeHistory2.csv

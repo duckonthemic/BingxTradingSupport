@@ -28,22 +28,39 @@ class FilterResult(Enum):
 
 @dataclass
 class LeverageConfig:
-    """Leverage configuration per asset class."""
-    # Altcoins: 10-20x
-    altcoin_leverage: int = 15
-    # Major coins (BTC, ETH, SOL): 100x
-    major_leverage: int = 100
-    # Gold: 500x
-    gold_leverage: int = 500
+    """Leverage configuration per asset class - RISK OPTIMIZED v3.0."""
+    # === LEVERAGE CAPS (Based on TradeHistory2 analysis) ===
+    # x500 trades: -4463.7% PnL (DISASTER) - ELIMINATED
+    # x15 trades: +2591.6% PnL (PROFITABLE) - KEEP
     
-    # Position size - Grade-based (Phase 1)
-    position_size_grade_a: float = 2.0  # $2 for Grade A/Diamond (full)
-    position_size_grade_b: float = 1.0  # $1 for Grade B/Gold (half)
-    position_size_usd: float = 2.0      # Legacy default
+    # Altcoins: Max x15 (was 15, keep)
+    altcoin_leverage: int = 15
+    # Major coins (BTC, ETH, SOL): Max x75 (was 100, reduced for safety)
+    major_leverage: int = 75
+    # Gold/Silver: Max x100 (was 500, CRITICAL FIX - XAUT x500 = -4113% PnL)
+    gold_leverage: int = 100
+    # Index leverage: x50
+    index_leverage: int = 50
+    
+    # ABSOLUTE MAX LEVERAGE (never exceed)
+    absolute_max_leverage: int = 100
+    
+    # Position size - Risk optimized (based on checklist)
+    # $25 total capital, max $1 per trade
+    position_size_3_3: float = 1.0    # Full $1 for 3/3 checklist
+    position_size_2_3: float = 0.5    # $0.50 for 2/3 checklist (SHORT only)
+    position_size_1_3: float = 0.0    # No trade for 1/3
+    position_size_usd: float = 1.0    # Default max $1
+    
+    # Legacy position sizes (deprecated)
+    position_size_grade_a: float = 1.0  # $1 for Grade A/Diamond
+    position_size_grade_b: float = 0.5  # $0.5 for Grade B/Gold
     
     # Major coins list
     major_coins: tuple = ("BTC-USDT", "ETH-USDT", "SOL-USDT")
     gold_symbols: tuple = ("XAUT-USDT", "PAXG-USDT")
+    # Index patterns
+    index_patterns: tuple = ("NCSI", "NCCO", "NCFX", "NCC")
 
 
 @dataclass 
@@ -62,12 +79,56 @@ class OptimizedLevels:
     liquidation_price: float
 
 
+# === STRATEGY-DIRECTION RULES (Based on TradeHistory2 Analysis) ===
+# SFP LONG: 35.7% WR, -3194.3% PnL => BLOCK
+# SFP SHORT: 60.6% WR, +531.5% PnL => ALLOW
+# EMA_PULLBACK LONG: 33.3% WR, -995.5% PnL => BLOCK
+# EMA_PULLBACK SHORT: 54.8% WR, +793.9% PnL => ALLOW
+# BB_BOUNCE LONG: 30.0% WR, -575.7% PnL => BLOCK
+# LIQ_SWEEP SHORT: 73.3% WR, +791.0% PnL => PRIORITIZE
+
+STRATEGY_DIRECTION_RULES = {
+    'SFP': {
+        'LONG': False,   # 🚫 BLOCKED (-3194.3% PnL, 35.7% WR)
+        'SHORT': True,   # ✅ ALLOWED (+531.5% PnL, 60.6% WR)
+    },
+    'EMA_PULLBACK': {
+        'LONG': False,   # 🚫 BLOCKED (-995.5% PnL, 33.3% WR)
+        'SHORT': True,   # ✅ ALLOWED (+793.9% PnL, 54.8% WR)
+    },
+    'LIQ_SWEEP': {
+        'LONG': 'CONDITIONAL',  # ⚠️ Only with 3/3 checklist
+        'SHORT': True,          # ✅ PRIORITIZE (+791.0% PnL, 73.3% WR)
+    },
+    'BB_BOUNCE': {
+        'LONG': False,   # 🚫 BLOCKED (-575.7% PnL, 30.0% WR)
+        'SHORT': True,   # ⚠️ ALLOWED (+111.6% PnL)
+    },
+    'BREAKER_RETEST': {
+        'LONG': 'CONDITIONAL',  # ⚠️ Only with 3/3 checklist
+        'SHORT': True,          # ✅ ALLOWED (+195.3% PnL, 69.2% WR)
+    },
+    'IE': {
+        'LONG': 'CONDITIONAL',  # ⚠️ Only with 3/3 checklist
+        'SHORT': True,          # ✅ 100% WR in data
+    },
+}
+
+
 class TradeFilter:
     """
-    Filters trades based on:
-    1. BTC Mood Check - reject Long if BTC dumping
-    2. MTF Trend Filter - align with H1 trend
-    3. Range Market Detection - allow mean-reversion in sideways
+    Trade Filter v3.0 - Risk Optimized
+    
+    Based on TradeHistory2 analysis:
+    - LONG trades: -4339.4% PnL, 32.6% WR => HEAVILY RESTRICTED
+    - SHORT trades: +2433.5% PnL, 57.9% WR => PREFERRED
+    
+    Filters:
+    1. Strategy-Direction Rules - Block losing combinations
+    2. Checklist Requirements - 3/3 for LONG, 2/3+ for SHORT
+    3. Leverage Caps - Max x100 (no x500 ever)
+    4. BTC Mood Check - reject Long if BTC dumping
+    5. MTF Trend Filter - align with H1 trend
     """
     
     def __init__(self):
@@ -174,28 +235,119 @@ class TradeFilter:
         
         return True, "No filter"
     
+    def validate_strategy_direction(self, strategy: str, direction: str, checklist_score: int = 0) -> Tuple[bool, str]:
+        """
+        Validate if strategy-direction combination is allowed.
+        
+        Based on TradeHistory2 analysis:
+        - SFP LONG: -3194.3% PnL => BLOCKED
+        - EMA_PULLBACK LONG: -995.5% PnL => BLOCKED
+        - BB_BOUNCE LONG: -575.7% PnL => BLOCKED
+        
+        Args:
+            strategy: Strategy name (SFP, EMA_PULLBACK, etc.)
+            direction: LONG or SHORT
+            checklist_score: 0-3 checklist score
+        
+        Returns:
+            (allowed, reason)
+        """
+        # Normalize strategy name
+        strat_key = strategy.upper().replace('LIQ_SWEEP', 'LIQ_SWEEP').replace('LIQUIDITY_SWEEP', 'LIQ_SWEEP')
+        if 'IE' in strat_key:
+            strat_key = 'IE'
+        
+        # Get rules
+        rules = STRATEGY_DIRECTION_RULES.get(strat_key, {'LONG': True, 'SHORT': True})
+        dir_key = direction.upper()
+        
+        allowed = rules.get(dir_key, True)
+        
+        # Handle conditional cases (require 3/3 checklist)
+        if allowed == 'CONDITIONAL':
+            if checklist_score >= 3:
+                return True, f"{strat_key} {dir_key} allowed with 3/3 checklist"
+            else:
+                return False, f"{strat_key} {dir_key} requires 3/3 checklist (have {checklist_score}/3)"
+        
+        if not allowed:
+            return False, f"{strat_key} {dir_key} BLOCKED (negative historical PnL)"
+        
+        return True, f"{strat_key} {dir_key} allowed"
+    
+    def get_checklist_requirements(self, direction: str) -> int:
+        """
+        Get minimum checklist score required for direction.
+        
+        Based on TradeHistory2:
+        - 3/3 checklist: +1455.6% PnL, 56.1% WR
+        - 2/3 checklist: -3471.4% PnL, 46.6% WR (only SHORT can recover)
+        - 1/3 checklist: -84.6% PnL, 30.8% WR
+        """
+        if direction.upper() == 'LONG':
+            return 3  # LONG requires 3/3 checklist (only profitable combination)
+        else:
+            return 2  # SHORT can work with 2/3 (SHORT trades have +2433.5% overall)
+    
     def get_leverage(self, symbol: str) -> int:
-        """Get appropriate leverage for symbol."""
+        """Get appropriate leverage for symbol with safety caps."""
+        # Check for index symbols
+        for pattern in self.leverage_config.index_patterns:
+            if pattern in symbol:
+                lev = self.leverage_config.index_leverage
+                return min(lev, self.leverage_config.absolute_max_leverage)
+        
+        # Check for gold/silver
         if symbol in self.leverage_config.gold_symbols:
-            return self.leverage_config.gold_leverage
+            # CRITICAL: XAUT x500 = -4113% PnL, cap at x100
+            lev = self.leverage_config.gold_leverage
+            return min(lev, self.leverage_config.absolute_max_leverage)
+        
+        # Check for major coins
         elif symbol in self.leverage_config.major_coins:
-            return self.leverage_config.major_leverage
+            lev = self.leverage_config.major_leverage
+            return min(lev, self.leverage_config.absolute_max_leverage)
+        
+        # Default: altcoin leverage
         else:
             return self.leverage_config.altcoin_leverage
     
-    def get_position_size(self, tier: str = "DIAMOND") -> float:
+    def get_position_size(self, tier: str = "DIAMOND", checklist_score: int = 3, direction: str = "SHORT") -> float:
         """
-        Get position size based on signal tier/grade.
+        Get position size based on checklist score and direction.
         
-        Phase 1 Implementation:
-        - DIAMOND / Grade A: Full position ($2)
-        - GOLD / Grade B: Half position ($1)
-        - SILVER / below: No trade
+        v3.0 - Risk Optimized:
+        - Max position: $1 (from $25 capital)
+        - 3/3 checklist: Full $1
+        - 2/3 checklist: $0.50 (SHORT only)
+        - 1/3 checklist: $0 (no trade)
+        - LONG requires 3/3 checklist
+        
+        Based on TradeHistory2:
+        - 3/3 checklist: +1455.6% PnL (PROFITABLE)
+        - 2/3 checklist: -3471.4% PnL (ONLY SHORT recovers)
         """
+        # Check checklist requirements
+        min_required = self.get_checklist_requirements(direction)
+        if checklist_score < min_required:
+            return 0.0  # No trade
+        
+        # Position size by checklist
+        if checklist_score >= 3:
+            return self.leverage_config.position_size_3_3  # $1.00
+        elif checklist_score == 2:
+            if direction.upper() == 'SHORT':
+                return self.leverage_config.position_size_2_3  # $0.50
+            else:
+                return 0.0  # LONG requires 3/3
+        else:
+            return 0.0  # No trade for 1/3 or less
+        
+        # Legacy tier-based fallback
         if tier.upper() in ["DIAMOND", "A", "A_SNIPER"]:
-            return self.leverage_config.position_size_grade_a  # $2
+            return self.leverage_config.position_size_grade_a  # $1
         elif tier.upper() in ["GOLD", "B", "B_SCALP"]:
-            return self.leverage_config.position_size_grade_b  # $1
+            return self.leverage_config.position_size_grade_b  # $0.5
         else:
             return 0.0  # No trade for Silver/Reject
     
