@@ -93,7 +93,7 @@ class CoinIndicators:
     # Orderbook Imbalance (if available)
     bid_ask_ratio: float = 1.0  # bid_volume / ask_volume
     
-    # ========== v3.0 NEW INDICATORS (TradingView Style) ==========
+    # ========== v3.0 INDICATORS ==========
     
     # MFI (Money Flow Index)
     mfi: float = 50.0
@@ -448,7 +448,7 @@ class IndicatorCalculator:
         
         return df
     
-    # ========== BASIC INDICATOR METHODS ==========
+    # --- Basic Indicator Methods ---
     
     def _calc_ema(self, series: pd.Series, period: int) -> float:
         ema = ta.trend.ema_indicator(series, window=period)
@@ -473,7 +473,7 @@ class IndicatorCalculator:
         atr = ta.volatility.average_true_range(df['high'], df['low'], df['close'], window=self.atr_period)
         return float(atr.iloc[-1]) if not atr.empty and not pd.isna(atr.iloc[-1]) else 0.0
     
-    # ========== NEW v2.0 INDICATOR METHODS ==========
+    # --- v2.0 Indicator Methods ---
     
     def _calc_vwap(self, df: pd.DataFrame) -> float:
         """Calculate VWAP (Volume Weighted Average Price)."""
@@ -572,7 +572,7 @@ class IndicatorCalculator:
         
         return score
     
-    # ========== NEW v3.0 INDICATOR METHODS ==========
+    # --- v3.0 Indicator Methods ---
     
     def _calc_mfi(self, df: pd.DataFrame, period: int = 14) -> float:
         """Calculate Money Flow Index."""
@@ -799,68 +799,4 @@ class IndicatorCalculator:
             return 0.0, False, "Neutral"
 
 
-# ==================== Test ====================
-
-def test_indicator_calculator_v2():
-    """Test indicator calculation with sample data."""
-    print("=" * 60)
-    print("Testing Indicator Calculator v2.0 (Enhanced)")
-    print("=" * 60)
-    
-    import random
-    base_price = 100.0
-    
-    def generate_klines(count: int, volatility: float = 0.02) -> List[List]:
-        klines = []
-        price = base_price
-        for i in range(count):
-            change = random.uniform(-volatility, volatility)
-            open_p = price
-            close_p = price * (1 + change)
-            high_p = max(open_p, close_p) * (1 + random.uniform(0, volatility/2))
-            low_p = min(open_p, close_p) * (1 - random.uniform(0, volatility/2))
-            volume = random.uniform(10000, 50000)
-            klines.append([i * 60000, open_p, high_p, low_p, close_p, volume])
-            price = close_p
-        return klines
-    
-    klines_15m = generate_klines(100, 0.01)
-    klines_h1 = generate_klines(100, 0.02)
-    klines_h4 = generate_klines(100, 0.03)
-    
-    calc = IndicatorCalculator()
-    ind = calc.calculate("TEST-USDT", klines_15m, klines_h1, klines_h4)
-    
-    if ind:
-        print(f"\n✅ Indicators calculated for {ind.symbol}")
-        print("\n📊 BASIC INDICATORS:")
-        print(f"   Price: ${ind.price:.4f}")
-        print(f"   EMA34/89 (H4): ${ind.ema34_h4:.4f} / ${ind.ema89_h4:.4f}")
-        print(f"   RSI (15m): {ind.rsi_15m:.1f}")
-        print(f"   BB Bandwidth: {ind.bb_bandwidth*100:.2f}%")
-        print(f"   ADX: {ind.adx:.1f}")
-        print(f"   Volume Ratio: {ind.volume_ratio:.2f}x")
-        
-        print("\n🆕 NEW v2.0 INDICATORS:")
-        print(f"   VWAP: ${ind.vwap:.4f} ({ind.price_vs_vwap:+.2f}%)")
-        print(f"   OBV Trend: {ind.obv_trend}")
-        print(f"   Stoch RSI K/D: {ind.stoch_rsi_k:.1f} / {ind.stoch_rsi_d:.1f}")
-        print(f"   MACD: {ind.macd_histogram:.4f} ({ind.macd_trend})")
-        
-        print("\n📈 MULTI-TIMEFRAME:")
-        print(f"   15m: {ind.trend_15m}")
-        print(f"   1h:  {ind.trend_h1}")
-        print(f"   4h:  {ind.trend_h4}")
-        print(f"   MTF Alignment Score: {ind.mtf_alignment_score}/3")
-        
-        print("\n🕯️ CANDLE ANALYSIS:")
-        print(f"   Last Candle: {'🟢 Bullish' if ind.last_candle_bullish else '🔴 Bearish'}")
-        print(f"   Body Ratio: {ind.candle_body_ratio*100:.1f}%")
-        
-        print("\n✅ All v2.0 features working!")
-    else:
-        print("❌ Failed to calculate indicators")
-
-
-if __name__ == "__main__":
-    test_indicator_calculator_v2()
+# Singleton test removed - use pytest instead

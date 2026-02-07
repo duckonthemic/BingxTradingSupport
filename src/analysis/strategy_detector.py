@@ -488,9 +488,9 @@ class StrategyDetector:
             if candle_range > 0 and lower_wick / candle_range >= 0.35:
                 # Momentum confirmation
                 reasons = [
-                    f"Quét đáy swing low {last_swing_low:.6g}",
-                    f"Rút chân mạnh (wick {lower_wick/candle_range*100:.0f}%)",
-                    f"Đóng nến trên vùng quét"
+                    f"Swept swing low {last_swing_low:.6g}",
+                    f"Strong wick rejection (wick {lower_wick/candle_range*100:.0f}%)",
+                    f"Closed above sweep zone"
                 ]
                 
                 confidence = 0.70
@@ -575,9 +575,9 @@ class StrategyDetector:
             # Relaxed: wick >= 35% (was 50%)
             if candle_range > 0 and upper_wick / candle_range >= 0.35:
                 reasons = [
-                    f"Quét đỉnh swing high {last_swing_high:.6g}",
-                    f"Rút chân mạnh (wick {upper_wick/candle_range*100:.0f}%)",
-                    f"Đóng nến dưới vùng quét"
+                    f"Swept swing high {last_swing_high:.6g}",
+                    f"Strong wick rejection (wick {upper_wick/candle_range*100:.0f}%)",
+                    f"Closed below sweep zone"
                 ]
                 
                 confidence = 0.70
@@ -660,9 +660,9 @@ class StrategyDetector:
             # Swept the clustered lows
             if recent_candle_low < min(recent_lows) and closes[-1] > min(recent_lows):
                 reasons = [
-                    f"Quét liquidity vùng đáy cụm ({len(recent_lows)} đáy)",
-                    f"Vùng liquidity: {min(recent_lows):.6g} - {max(recent_lows):.6g}",
-                    "Đóng nến phục hồi trên vùng quét"
+                    f"Swept clustered lows ({len(recent_lows)} lows)",
+                    f"Liquidity zone: {min(recent_lows):.6g} - {max(recent_lows):.6g}",
+                    "Recovered above sweep zone"
                 ]
                 
                 confidence = 0.75  # Higher confidence for multi-low sweep
@@ -730,9 +730,9 @@ class StrategyDetector:
             
             if recent_candle_high > max(recent_highs) and closes[-1] < max(recent_highs):
                 reasons = [
-                    f"Quét liquidity vùng đỉnh cụm ({len(recent_highs)} đỉnh)",
-                    f"Vùng liquidity: {min(recent_highs):.6g} - {max(recent_highs):.6g}",
-                    "Đóng nến phục hồi dưới vùng quét"
+                    f"Swept clustered highs ({len(recent_highs)} highs)",
+                    f"Liquidity zone: {min(recent_highs):.6g} - {max(recent_highs):.6g}",
+                    "Recovered below sweep zone"
                 ]
                 
                 confidence = 0.75
@@ -816,10 +816,10 @@ class StrategyDetector:
             return None
         
         reasons = [
-            f"Pullback vào vùng EMA Cloud",
+            f"Pullback into EMA Cloud zone",
             f"EMA34: {ema34:.6g} | EMA89: {ema89:.6g}",
-            f"Trend mạnh: EMA gap {trend.ema_gap_pct:.2f}%",
-            "Nến xanh rút chân tại Cloud"
+            f"Strong trend: EMA gap {trend.ema_gap_pct:.2f}%",
+            "Bullish candle with wick rejection at Cloud"
         ]
         
         confidence = 0.65
@@ -895,10 +895,10 @@ class StrategyDetector:
             return None
         
         reasons = [
-            f"Pullback vào vùng EMA Cloud",
+            f"Pullback into EMA Cloud zone",
             f"EMA34: {ema34:.6g} | EMA89: {ema89:.6g}",
-            f"Trend mạnh: EMA gap {trend.ema_gap_pct:.2f}%",
-            "Nến đỏ rút chân tại Cloud"
+            f"Strong trend: EMA gap {trend.ema_gap_pct:.2f}%",
+            "Bearish candle with wick rejection at Cloud"
         ]
         
         confidence = 0.65
@@ -971,16 +971,16 @@ class StrategyDetector:
                 
                 if max_after_break > broken_high * 1.01:  # Was at least 1% above
                     reasons = [
-                        f"Retest đỉnh cũ (Breaker Block): {broken_high:.6g}",
-                        "Đỉnh cũ thành hỗ trợ mới",
-                        f"Breakout trước đó: {max_after_break:.6g}"
+                        f"Retest old high (Breaker Block): {broken_high:.6g}",
+                        "Old high becomes new support",
+                        f"Previous breakout: {max_after_break:.6g}"
                     ]
                     
                     confidence = 0.68
                     
                     if momentum.has_volume_spike:
                         confidence += 0.05
-                        reasons.append("✅ Volume xác nhận")
+                        reasons.append("✅ Volume confirmed")
                     
                     entry = current_price
                     sl = broken_high - atr * 0.5
@@ -1034,16 +1034,16 @@ class StrategyDetector:
                 
                 if min_after_break < broken_low * 0.99:
                     reasons = [
-                        f"Retest đáy cũ (Breaker Block): {broken_low:.6g}",
-                        "Đáy cũ thành kháng cự mới",
-                        f"Breakdown trước đó: {min_after_break:.6g}"
+                        f"Retest old low (Breaker Block): {broken_low:.6g}",
+                        "Old low becomes new resistance",
+                        f"Previous breakdown: {min_after_break:.6g}"
                     ]
                     
                     confidence = 0.68
                     
                     if momentum.has_volume_spike:
                         confidence += 0.05
-                        reasons.append("✅ Volume xác nhận")
+                        reasons.append("✅ Volume confirmed")
                     
                     entry = current_price
                     sl = broken_low + atr * 0.5
@@ -1131,7 +1131,7 @@ class StrategyDetector:
             # Additional: RSI should be < 40 for oversold condition
             if momentum.rsi < 45 or momentum.wt_oversold:
                 reasons = [
-                    f"📊 Chạm BB Lower band",
+                    f"📊 Touched BB Lower band",
                     f"RSI: {momentum.rsi:.0f} (oversold zone)",
                     f"Close above BB Lower - bounce confirmed"
                 ]
@@ -1207,7 +1207,7 @@ class StrategyDetector:
             # Additional: RSI should be > 60 for overbought condition
             if momentum.rsi > 55 or momentum.wt_overbought:
                 reasons = [
-                    f"📊 Chạm BB Upper band",
+                    f"📊 Touched BB Upper band",
                     f"RSI: {momentum.rsi:.0f} (overbought zone)",
                     f"Close below BB Upper - reversal confirmed"
                 ]

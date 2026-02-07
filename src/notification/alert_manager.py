@@ -691,9 +691,9 @@ class AlertManager:
         # Debug: log rejection stats
         logger.info(f"📈 Found {len(valid_setups)} valid | Rejected: trend={self._stats.get('filtered_by_trend',0)}, score={self._stats.get('filtered_by_score',0)}, btc={self._stats.get('filtered_by_btc',0)}")
         
-        # ========== NEW SELECTION LOGIC ==========
-        # 1. Chọn 1 lệnh tốt nhất từ mỗi strategy
-        # 2. Thêm 1 lệnh top tier (Diamond với nhiều confluence nhất)
+        # ========== SELECTION LOGIC ==========
+        # 1. Pick best setup per strategy
+        # 2. Add top tier setup (Diamond with most confluence)
         
         from collections import defaultdict
         
@@ -946,7 +946,7 @@ class AlertManager:
             strat_dir_allowed, strat_dir_reason = self.trade_filter.validate_strategy_direction(
                 strategy=best_setup.strategy.value,
                 direction=best_setup.direction,
-                checklist_score=0  # Will check after scoring
+                  checklist_score=None  # Pre-check: let CONDITIONAL through, re-check after scoring
             )
             if not strat_dir_allowed:
                 self._stats["filtered_by_strategy_direction"] = self._stats.get("filtered_by_strategy_direction", 0) + 1
@@ -1020,7 +1020,7 @@ class AlertManager:
             # - 3/3 checklist: +1455.6% PnL, 56.1% WR (PROFITABLE)
             # - 2/3 checklist: -3471.4% PnL, 46.6% WR (LOSS, except SHORT)
             # - 1/3 checklist: -84.6% PnL, 30.8% WR (ALWAYS LOSS)
-            checklist_score_num = checklist.matched_count if hasattr(checklist, 'matched_count') else 0
+            checklist_score_num = checklist.total_score if hasattr(checklist, 'total_score') else 0
             min_checklist_required = self.trade_filter.get_checklist_requirements(best_setup.direction)
             
             if checklist_score_num < min_checklist_required:

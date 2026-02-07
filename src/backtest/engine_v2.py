@@ -2,7 +2,6 @@
 Backtesting Engine v2.0 - Full Signal Simulation
 
 IMPROVEMENTS over v1.0:
-═══════════════════════════════════════════════════════════════════
 1. Full Scoring System v2.1 integration (not random signals)
 2. BTC Correlation Filter (block LONG when BTC dumps >0.5%)
 3. 4-Layer Filter for SHORT (BB Upper/RSI>75 + Shooting Star + Vol + Prev Green)
@@ -28,9 +27,7 @@ import numpy as np
 logger = logging.getLogger(__name__)
 
 
-# ═══════════════════════════════════════════════════════════════════
-# CONSTANTS
-# ═══════════════════════════════════════════════════════════════════
+# --- Constants ---
 
 # Tier thresholds (from scoring_system.py)
 THRESHOLD_DIAMOND = 80
@@ -46,9 +43,7 @@ TRADING_FEE = 0.04          # 0.04% per trade (BingX taker fee)
 FUNDING_FEE_PER_8H = 0.01   # 0.01% funding rate per 8h
 
 
-# ═══════════════════════════════════════════════════════════════════
-# DATA CLASSES
-# ═══════════════════════════════════════════════════════════════════
+# --- Data Classes ---
 
 class TradeResult(Enum):
     WIN = "WIN"
@@ -147,9 +142,7 @@ class BacktestResultV2:
     trades: List[BacktestTradeV2]
 
 
-# ═══════════════════════════════════════════════════════════════════
-# BACKTEST ENGINE V2
-# ═══════════════════════════════════════════════════════════════════
+# --- Backtest Engine V2 ---
 
 class BacktestEngineV2:
     """
@@ -1150,9 +1143,7 @@ class BacktestEngineV2:
         print(f"💱 Total Trades: {result.total_trades}")
         print()
         
-        print("═══════════════════════════════════════════════════════════════════")
-        print("📈 OVERALL PERFORMANCE")
-        print("═══════════════════════════════════════════════════════════════════")
+        print("--- 📈 OVERALL PERFORMANCE ---")
         print(f"   Win/Loss/BE: {result.wins}/{result.losses}/{result.breakevens}")
         print(f"   Winrate: {result.winrate:.1f}%")
         print(f"   Total PnL: {result.total_pnl_percent:+.2f}% (${result.total_pnl_usd:+.2f})")
@@ -1160,25 +1151,19 @@ class BacktestEngineV2:
         print(f"   Max Drawdown: {result.max_drawdown_percent:.2f}% (${result.max_drawdown_usd:.2f})")
         print()
         
-        print("═══════════════════════════════════════════════════════════════════")
-        print("💎 TIER BREAKDOWN")
-        print("═══════════════════════════════════════════════════════════════════")
+        print("--- 💎 TIER BREAKDOWN ---")
         d_status = "✅" if result.diamond_winrate >= 65 else "❌"
         g_status = "✅" if result.gold_winrate >= 55 else "❌"
         print(f"   {d_status} DIAMOND: {result.diamond_trades} trades, {result.diamond_wins} wins, {result.diamond_winrate:.1f}% (target: 65%+)")
         print(f"   {g_status} GOLD: {result.gold_trades} trades, {result.gold_wins} wins, {result.gold_winrate:.1f}% (target: 55%+)")
         print()
         
-        print("═══════════════════════════════════════════════════════════════════")
-        print("📊 DIRECTION BREAKDOWN")
-        print("═══════════════════════════════════════════════════════════════════")
+        print("--- 📊 DIRECTION BREAKDOWN ---")
         print(f"   LONG: {result.long_trades} trades, {result.long_winrate:.1f}% winrate")
         print(f"   SHORT: {result.short_trades} trades, {result.short_winrate:.1f}% winrate")
         print()
         
-        print("═══════════════════════════════════════════════════════════════════")
-        print("🔒 FILTER STATS")
-        print("═══════════════════════════════════════════════════════════════════")
+        print("--- 🔒 FILTER STATS ---")
         print(f"   Blocked by BTC Correlation: {result.blocked_by_btc_filter}")
         print(f"   Blocked by 4-Layer Filter: {result.blocked_by_4layer_filter}")
         print(f"   Blocked by Cooldown (12 candles): {result.blocked_by_cooldown}")
@@ -1192,9 +1177,7 @@ class BacktestEngineV2:
             print(f"   BTC Dumps > 0.5%: {btc_dumps} times")
         print()
         
-        print("═══════════════════════════════════════════════════════════════════")
-        print("📋 STRATEGY BREAKDOWN")
-        print("═══════════════════════════════════════════════════════════════════")
+        print("--- 📋 STRATEGY BREAKDOWN ---")
         for strat, stats in result.strategy_stats.items():
             wr = stats.get('winrate', 0)
             status = "✅" if wr >= 55 else "❌"
@@ -1215,9 +1198,7 @@ class BacktestEngineV2:
                       f"PnL: {trade.pnl_percent:+.2f}% | Hit: {trade.hit_level}")
 
 
-# ═══════════════════════════════════════════════════════════════════
-# CLI
-# ═══════════════════════════════════════════════════════════════════
+# --- CLI ---
 
 async def run_backtest_v2_cli():
     """CLI entry point for backtest v2."""

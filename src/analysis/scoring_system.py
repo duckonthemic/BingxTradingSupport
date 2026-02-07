@@ -1,36 +1,16 @@
 """
 Scoring System v2.0 - Confidence Matrix + Tier System + Rate Limiter
 
-CONFIDENCE SCORING MATRIX (Max 100 điểm):
-═══════════════════════════════════════════════════════════════════
-Strategy Points:
-  • Pump Fade / Shooting Star (Râu dài, Vol to)      +30 điểm
-  • SFP (Swing Failure Pattern)                       +25 điểm
-  • EMA Trend Alignment (Thuận xu hướng H1)          +20 điểm
+Scoring Matrix (Max 100):
+  Strategy: Pump Fade +30, SFP +25, EMA Alignment +20, etc.
+  Confirm:  RSI Divergence +15, Volume Spike +10
+  Penalty:  Counter-trend -25
 
-Confirmation Points:
-  • RSI Divergence (Phân kỳ)                         +15 điểm
-  • Volume Spike (>2x trung bình)                    +10 điểm
+Tiers: DIAMOND (>=70), GOLD (>=40), SILVER (>=35), REJECT (<35)
 
-Penalty:
-  • Ngược Trend H1 (Counter-trend)                   -10 điểm
+Rate Limiter: 8 alerts/hour, tightens at 4+ and 6+.
 
-TIER SYSTEM:
-═══════════════════════════════════════════════════════════════════
-💎 DIAMOND (Score >= 80): Kèo Confluence - ưu tiên cao nhất
-🥇 GOLD (60 <= Score < 80): Kèo Lẻ - chỉ gửi khi quota còn
-
-RATE LIMITER (10 alerts/hour):
-═══════════════════════════════════════════════════════════════════
-  • alerts < 5: Mở cửa - bắn cả Diamond và Gold
-  • 5 <= alerts < 8: Siết chặt - chỉ Diamond (>=80)
-  • 8 <= alerts < 10: Sniper - chỉ Super (>=90)
-  • alerts >= 10: Đóng cửa - chờ qua giờ
-
-SPECIAL COMBOS:
-═══════════════════════════════════════════════════════════════════
-🔥 Kill Shot: Shooting Star + SFP = Confidence 10/10 (+50 bonus)
-⚡ Insurance: Shooting Star + RSI Div = Double confidence (+15 bonus)
+Combos: Kill Shot (SS+SFP) +50, Insurance (SS+RSI Div) +15
 """
 
 import logging
@@ -44,9 +24,7 @@ from datetime import datetime
 logger = logging.getLogger(__name__)
 
 
-# ═══════════════════════════════════════════════════════════════════
-# ENUMS & CONSTANTS
-# ═══════════════════════════════════════════════════════════════════
+# --- Enums & Constants ---
 
 class SignalTier(Enum):
     """Signal tier based on score."""
@@ -64,16 +42,14 @@ TIER_ICONS = {
 }
 
 TIER_VOLUME_WEIGHT = {
-    SignalTier.DIAMOND: 1.0,   # 100% volume
-    SignalTier.GOLD: 0.7,      # 70% volume
-    SignalTier.SILVER: 0.0,    # Không trade
-    SignalTier.REJECT: 0.0,    # Không trade
+    SignalTier.DIAMOND: 1.0,
+    SignalTier.GOLD: 0.7,
+    SignalTier.SILVER: 0.0,
+    SignalTier.REJECT: 0.0,
 }
 
 
-# ═══════════════════════════════════════════════════════════════════
-# SCORING CONSTANTS
-# ═══════════════════════════════════════════════════════════════════
+# --- Scoring Constants ---
 
 SCORE_POINTS = {
     # Strategy Points
@@ -94,62 +70,60 @@ SCORE_POINTS = {
     'fib_standard': 10,        # Fib 0.5-0.618 Standard Zone
     'macd_divergence': 10,     # MACD Histogram Divergence (for Pump Fade)
     
-    # Penalty - STRICT for safety
-    'counter_trend': -25,      # Ngược Trend H1 - trừ mạnh
-    'no_macd_confirm': -10,    # Pump Fade không có MACD confirm
+    # Penalties
+    'counter_trend': -25,      # Counter-trend H1
+    'no_macd_confirm': -10,    # Pump Fade without MACD confirm
     
     # Bonus Combos
     'kill_shot_bonus': 50,     # Shooting Star + SFP = Kill Shot
     'insurance_bonus': 15,     # Shooting Star + RSI Div
 }
 
-# Thresholds - VERY RELAXED for bear market signals  
-THRESHOLD_DIAMOND = 70  # High confluence required
-THRESHOLD_GOLD = 40     # Lowered for bear market (was 50)
-THRESHOLD_SILVER = 35   # Minimum acceptable
+# Tier thresholds (bear market optimized)
+THRESHOLD_DIAMOND = 70
+THRESHOLD_GOLD = 40
+THRESHOLD_SILVER = 35
 
 # Minimum confirmations required for each tier
 MIN_CONFIRMATIONS_DIAMOND = 3  # Need at least 3 confirmations for DIAMOND
 MIN_CONFIRMATIONS_GOLD = 2     # Need at least 2 confirmations for GOLD
 
 
-# ═══════════════════════════════════════════════════════════════════
-# DATA CLASSES
-# ═══════════════════════════════════════════════════════════════════
+# --- Data Classes ---
 
 @dataclass
 class ShootingStarResult:
-    """Kết quả phát hiện nến Shooting Star."""
+    """Shooting Star candle detection result."""
     is_valid: bool = False
-    upper_wick_pct: float = 0.0      # Tỷ lệ râu trên
-    body_pct: float = 0.0            # Tỷ lệ thân
-    close_position_pct: float = 0.0  # Vị trí đóng cửa
-    volume_ratio: float = 0.0        # Volume / MA20
-    is_above_bb_upper: bool = False  # Giá vượt BB Upper
-    is_rsi_overbought: bool = False  # RSI > 75
+    upper_wick_pct: float = 0.0
+    body_pct: float = 0.0
+    close_position_pct: float = 0.0
+    volume_ratio: float = 0.0
+    is_above_bb_upper: bool = False
+    is_rsi_overbought: bool = False
     detail: str = ""
 
 
 @dataclass
 class PumpFadeResult:
-    """Kết quả phát hiện Pump Fade setup."""
+    """Pump Fade (Shooting Star + SFP) setup result."""
     is_valid: bool = False
     is_shooting_star: bool = False
     is_sfp: bool = False
-    is_kill_shot: bool = False       # Shooting Star + SFP
+    is_kill_shot: bool = False
     has_rsi_divergence: bool = False
     has_volume_spike: bool = False
-    swing_high_broken: float = 0.0   # Đỉnh bị phá
-    signal_high: float = 0.0         # High của nến signal
+    swing_high_broken: float = 0.0
+    signal_high: float = 0.0
     entry_price: float = 0.0
-    stop_loss: float = 0.0           # Dynamic SL = Signal High + 0.1%
-    confidence: int = 0              # 0-100
+    stop_loss: float = 0.0
+    confidence: int = 0
     detail: str = ""
 
 
 @dataclass
 class ConfidenceScore:
-    """Kết quả chấm điểm Confidence."""
+    """Confidence scoring result (0-100)."""
     
     # === STRATEGY POINTS ===
     pump_fade_points: int = 0
@@ -185,7 +159,7 @@ class ConfidenceScore:
     
     @property
     def total_score(self) -> int:
-        """Tổng điểm (max 100)."""
+        """Total score capped at 0-100."""
         raw_score = (
             self.pump_fade_points +
             self.sfp_points +
@@ -221,7 +195,7 @@ class ConfidenceScore:
     
     @property
     def tier(self) -> SignalTier:
-        """Xác định tier dựa trên điểm VÀ số confirmations (v2.1)."""
+        """Determine tier based on score AND confirmation count."""
         score = self.total_score
         confirmations = self.confirmation_count
         
@@ -244,23 +218,23 @@ class ConfidenceScore:
     
     @property
     def tier_label(self) -> str:
-        """Label hiển thị cho tier."""
+        """Display label for tier."""
         return TIER_ICONS.get(self.tier, "")
     
     @property
     def volume_weight(self) -> float:
-        """Trọng số volume dựa trên tier."""
+        """Volume weight based on tier."""
         return TIER_VOLUME_WEIGHT.get(self.tier, 0.0)
     
     @property
     def is_tradeable(self) -> bool:
-        """Có đủ điểm để trade không."""
+        """True if score qualifies for trading."""
         return self.tier in [SignalTier.DIAMOND, SignalTier.GOLD]
 
 
 @dataclass
 class RateLimitStatus:
-    """Trạng thái Rate Limiter."""
+    """Rate limiter status."""
     alerts_last_hour: int = 0
     can_send_diamond: bool = True
     can_send_gold: bool = True
@@ -268,9 +242,7 @@ class RateLimitStatus:
     next_available: Optional[datetime] = None
 
 
-# ═══════════════════════════════════════════════════════════════════
-# LEGACY COMPATIBILITY - Giữ lại để không break import
-# ═══════════════════════════════════════════════════════════════════
+# --- Legacy Compatibility (kept to not break imports) ---
 
 class SignalGrade(Enum):
     """Legacy enum - mapped to SignalTier."""
@@ -430,9 +402,7 @@ class FourLayerResult:
         return self.layers_passed >= 3
 
 
-# ═══════════════════════════════════════════════════════════════════
-# SCORING SYSTEM CLASS
-# ═══════════════════════════════════════════════════════════════════
+# --- Scoring System Class ---
 
 class ScoringSystem:
     """
@@ -449,9 +419,9 @@ class ScoringSystem:
     
     def __init__(self):
         # Shooting Star thresholds
-        self.shooting_star_wick_min = 0.50   # Râu trên > 50% range
-        self.shooting_star_body_max = 0.30   # Thân < 30% range
-        self.shooting_star_close_max = 0.35  # Close ở 35% dưới cùng
+        self.shooting_star_wick_min = 0.50   # Upper wick > 50% range
+        self.shooting_star_body_max = 0.30   # Body < 30% range
+        self.shooting_star_close_max = 0.35  # Close in bottom 35%
         
         # Volume thresholds
         self.volume_spike_ratio = 2.0        # Volume > 2x MA20
@@ -474,9 +444,7 @@ class ScoringSystem:
         self.short_volume_ratio = 2.0
         self.prev_candle_body_min = 0.40
     
-    # ═══════════════════════════════════════════════════════════════════
-    # SHOOTING STAR DETECTION
-    # ═══════════════════════════════════════════════════════════════════
+    # --- Shooting Star Detection ---
     
     def detect_shooting_star(
         self,
@@ -484,21 +452,21 @@ class ScoringSystem:
         indicators: Dict
     ) -> ShootingStarResult:
         """
-        Phát hiện nến Shooting Star (Pump Fade).
+        Detect Shooting Star candle pattern.
         
-        Điều kiện:
-        1. Râu trên > 50% range
-        2. Thân nến < 30% range
-        3. Close ở 35% dưới cùng
+        Conditions:
+        1. Upper wick > 50% of range
+        2. Body < 30% of range
+        3. Close in bottom 35%
         4. Volume > 2x MA20
-        5. Giá vượt BB Upper hoặc RSI > 75
+        5. Price above BB Upper or RSI > 75
         """
         result = ShootingStarResult()
         
         if df.empty or len(df) < 21:
             return result
         
-        # Nến hiện tại
+        # Current candle
         curr = df.iloc[-1]
         high = float(curr['high'])
         low = float(curr['low'])
@@ -510,7 +478,7 @@ class ScoringSystem:
         if total_range == 0:
             return result
         
-        # Tính toán anatomy
+        # Calculate candle anatomy
         upper_wick = high - max(open_p, close)
         body = abs(close - open_p)
         
@@ -549,9 +517,7 @@ class ScoringSystem:
         
         return result
     
-    # ═══════════════════════════════════════════════════════════════════
-    # PUMP FADE DETECTION (Shooting Star + SFP Combo)
-    # ═══════════════════════════════════════════════════════════════════
+    # --- Pump Fade Detection (Shooting Star + SFP Combo) ---
     
     def detect_pump_fade(
         self,
@@ -560,9 +526,8 @@ class ScoringSystem:
         swing_high_20: float
     ) -> PumpFadeResult:
         """
-        Phát hiện Pump Fade setup (Shooting Star + SFP combo).
-        
-        Kill Shot = Shooting Star chọc thủng Swing High rồi rút râu
+        Detect Pump Fade setup (Shooting Star + SFP combo).
+        Kill Shot = Shooting Star pierces Swing High then pulls back.
         """
         result = PumpFadeResult()
         
@@ -576,7 +541,7 @@ class ScoringSystem:
         if not shooting_star.is_valid:
             return result
         
-        # Nến hiện tại
+        # Current candle data
         curr = df.iloc[-1]
         high = float(curr['high'])
         close = float(curr['close'])
@@ -587,7 +552,7 @@ class ScoringSystem:
         # Dynamic Stoploss = Signal High + 0.1%
         result.stop_loss = high * 1.001
         
-        # Check SFP - Giá chọc thủng Swing High rồi đóng dưới
+        # Check SFP - Price pierced Swing High then closed below
         if swing_high_20 > 0:
             is_sfp = high > swing_high_20 and close < swing_high_20
             result.is_sfp = is_sfp
@@ -626,9 +591,7 @@ class ScoringSystem:
         
         return result
     
-    # ═══════════════════════════════════════════════════════════════════
-    # CONFIDENCE SCORING (NEW v2.0)
-    # ═══════════════════════════════════════════════════════════════════
+    # --- Confidence Scoring ---
     
     def calculate_confidence(
         self,
@@ -646,10 +609,10 @@ class ScoringSystem:
         swing_low_20: float = 0.0
     ) -> ConfidenceScore:
         """
-        Tính điểm Confidence theo Scoring Matrix.
+        Calculate Confidence score using the Scoring Matrix.
         
         Returns:
-            ConfidenceScore với total_score, tier, và breakdown
+            ConfidenceScore with total_score, tier, and breakdown
         """
         score = ConfidenceScore()
         score.suggested_direction = detected_direction or "NONE"
@@ -681,13 +644,13 @@ class ScoringSystem:
         
         # === 2. SFP POINTS (v2.1 - stricter requirements) ===
         if has_sfp or setup_type in ["SFP", "LIQUIDITY_SWEEP", "LIQ_SWEEP"]:
-            if not score.is_kill_shot:  # Tránh tính trùng với Kill Shot
-                # SFP cần volume spike để confirm liquidity grab (v2.1)
+            if not score.is_kill_shot:  # Avoid double-counting with Kill Shot
+                # SFP requires volume spike to confirm liquidity grab
                 if has_volume_spike:
                     score.sfp_points = SCORE_POINTS['sfp']
                     score.breakdown.append(f"✅ SFP/Sweep + Vol: +{SCORE_POINTS['sfp']} pts")
                 else:
-                    # Giảm điểm nếu không có volume confirm
+                    # Reduce points if no volume confirmation
                     score.sfp_points = SCORE_POINTS['sfp'] - 10  # 15 instead of 25
                     score.breakdown.append(f"⚠️ SFP (no vol): +{SCORE_POINTS['sfp'] - 10} pts")
         
@@ -797,9 +760,7 @@ class ScoringSystem:
         
         return score
     
-    # ═══════════════════════════════════════════════════════════════════
-    # RATE LIMITER
-    # ═══════════════════════════════════════════════════════════════════
+    # --- Rate Limiter ---
     
     def check_rate_limit(
         self,
@@ -837,7 +798,7 @@ class ScoringSystem:
         return False, f"OPEN: Score {score} < 60 (minimum threshold)"
     
     def get_rate_limit_status(self, alerts_last_hour: int) -> RateLimitStatus:
-        """Lấy trạng thái rate limiter."""
+        """Get rate limiter status."""
         status = RateLimitStatus(alerts_last_hour=alerts_last_hour)
         
         if alerts_last_hour >= self.max_alerts_per_hour:
@@ -846,7 +807,7 @@ class ScoringSystem:
             status.can_send_gold = False
         elif alerts_last_hour >= self.sniper_threshold:
             status.mode = "SNIPER"
-            status.can_send_diamond = True  # Nhưng cần >= 90
+            status.can_send_diamond = True  # But requires >= 90
             status.can_send_gold = False
         elif alerts_last_hour >= self.tight_threshold:
             status.mode = "TIGHT"
@@ -859,9 +820,7 @@ class ScoringSystem:
         
         return status
     
-    # ═══════════════════════════════════════════════════════════════════
-    # LEGACY METHODS - Giữ lại để backward compatibility
-    # ═══════════════════════════════════════════════════════════════════
+    # --- Legacy Methods (kept for backward compatibility) ---
     
     def evaluate_checklist(
         self,
@@ -883,7 +842,7 @@ class ScoringSystem:
         # Get data
         price = float(df_m15['close'].iloc[-1])
         
-        # === ĐIỀU KIỆN 1: EMA TREND ===
+        # === CONDITION 1: EMA TREND ===
         ema34_h1 = indicators.get('ema34_h1', 0)
         ema89_h1 = indicators.get('ema89_h1', 0)
         
@@ -891,13 +850,13 @@ class ScoringSystem:
         if price > ema34_h1 > ema89_h1:
             h1_trend = "BULLISH"
             score.ema_trend_score = 1 if detected_direction == "LONG" else 0
-            score.ema_trend_detail = f"Giá > EMA34 > EMA89 (H1 UPTREND)"
+            score.ema_trend_detail = f"Price > EMA34 > EMA89 (H1 UPTREND)"
         elif price < ema34_h1 < ema89_h1:
             h1_trend = "BEARISH"
             score.ema_trend_score = 1 if detected_direction == "SHORT" else 0
-            score.ema_trend_detail = f"Giá < EMA34 < EMA89 (H1 DOWNTREND)"
+            score.ema_trend_detail = f"Price < EMA34 < EMA89 (H1 DOWNTREND)"
         else:
-            score.ema_trend_detail = f"EMA không rõ xu hướng (H1 SIDEWAYS)"
+            score.ema_trend_detail = f"EMA no clear trend (H1 SIDEWAYS)"
         
         # Counter-trend check
         if detected_direction:
@@ -905,23 +864,23 @@ class ScoringSystem:
                (h1_trend == "BEARISH" and detected_direction == "LONG"):
                 score.is_counter_trend = True
         
-        # === ĐIỀU KIỆN 2: MARKET STRUCTURE ===
+        # === CONDITION 2: MARKET STRUCTURE ===
         structure = self._detect_market_structure(df_m15)
         if structure == "HH_HL" and detected_direction == "LONG":
             score.market_structure_score = 1
-            score.market_structure_detail = "M15 tạo Higher High + Higher Low (Uptrend)"
+            score.market_structure_detail = "M15 forming Higher High + Higher Low (Uptrend)"
         elif structure == "LL_LH" and detected_direction == "SHORT":
             score.market_structure_score = 1
-            score.market_structure_detail = "M15 tạo Lower Low + Lower High (Downtrend)"
+            score.market_structure_detail = "M15 forming Lower Low + Lower High (Downtrend)"
         else:
             score.market_structure_detail = f"M15 structure: {structure}"
         
-        # === ĐIỀU KIỆN 3: SFP/SWEEP ===
+        # === CONDITION 3: SFP/SWEEP ===
         if setup_type in ["SFP", "LIQUIDITY_SWEEP", "LIQ_SWEEP"]:
             score.sfp_sweep_score = 1
             score.trigger_detail = f"Trigger: {setup_type} detected"
         
-        # === ĐIỀU KIỆN 4: RETEST ZONE ===
+        # === CONDITION 4: RETEST ZONE ===
         in_ob_zone = indicators.get('in_ob_zone', False)
         in_fib_zone, fib_zone_type = self._check_fib_zone(df_m15, detected_direction)
         
@@ -939,7 +898,7 @@ class ScoringSystem:
             score.retest_zone_score = 1
             score.trigger_detail = f"Trigger: {setup_type} detected"
         
-        # === ĐIỀU KIỆN 5: RSI/WAVETREND ===
+        # === CONDITION 5: RSI/WAVETREND ===
         rsi = indicators.get('rsi_15m', 50)
         rsi_div = indicators.get('rsi_divergence', 'None')
         wt1 = indicators.get('wt1', 0)
@@ -971,7 +930,7 @@ class ScoringSystem:
                 details.append(f"WT Cross")
             score.momentum_detail = " + ".join(details)
         
-        # === ĐIỀU KIỆN 6: VOLUME SPIKE ===
+        # === CONDITION 6: VOLUME SPIKE ===
         volume_ratio = indicators.get('volume_ratio', 1.0)
         if volume_ratio >= 1.5:
             score.volume_spike_score = 1
@@ -1038,13 +997,13 @@ class ScoringSystem:
             result.layer1_pass = True
             result.is_overextended = True
             result.bb_position = "Above Upper Band"
-            result.layer1_reason = f"Giá vượt BB Upper"
+            result.layer1_reason = f"Price above BB Upper"
         elif rsi > self.rsi_overbought:
             result.layer1_pass = True
             result.is_overextended = True
-            result.layer1_reason = f"RSI quá mua ({rsi:.0f} > 75)"
+            result.layer1_reason = f"RSI overbought ({rsi:.0f} > 75)"
         else:
-            result.layer1_reason = f"Giá chưa overextended"
+            result.layer1_reason = f"Price not yet overextended"
         
         # === LAYER 2: CANDLE ANATOMY ===
         upper_wick = high - max(open_p, close)
@@ -1068,9 +1027,9 @@ class ScoringSystem:
         
         if is_shooting_star:
             result.layer2_pass = True
-            result.layer2_reason = f"Shooting Star (Râu {upper_wick_pct:.0%})"
+            result.layer2_reason = f"Shooting Star (Wick {upper_wick_pct:.0%})"
         else:
-            result.layer2_reason = f"Không phải Shooting Star"
+            result.layer2_reason = f"Not a Shooting Star"
         
         # === LAYER 3: VOLUME CONFIRMATION ===
         volumes = df['volume'].tail(21).values
@@ -1083,7 +1042,7 @@ class ScoringSystem:
             result.layer3_pass = True
             result.layer3_reason = f"Volume Spike x{vol_ratio:.1f}"
         else:
-            result.layer3_reason = f"Volume thấp x{vol_ratio:.1f}"
+            result.layer3_reason = f"Low volume x{vol_ratio:.1f}"
         
         # === LAYER 4: SAFETY CHECK ===
         prev_open = float(prev['open'])
@@ -1101,14 +1060,14 @@ class ScoringSystem:
         
         if prev_is_green and prev_body_pct >= self.prev_candle_body_min:
             result.layer4_pass = True
-            result.layer4_reason = f"Nến trước: Xanh thân {prev_body_pct:.0%}"
+            result.layer4_reason = f"Previous candle: Green body {prev_body_pct:.0%}"
         else:
-            result.layer4_reason = f"Nến trước không đủ điều kiện"
+            result.layer4_reason = f"Previous candle does not meet criteria"
         
         return result
     
     def _detect_market_structure(self, df: pd.DataFrame) -> str:
-        """Detect Market Structure trên M15."""
+        """Detect Market Structure on M15."""
         if len(df) < 20:
             return "NEUTRAL"
         
@@ -1139,7 +1098,7 @@ class ScoringSystem:
     
     def _check_fib_zone(self, df: pd.DataFrame, direction: str) -> Tuple[bool, str]:
         """
-        Check giá có trong vùng Fib retracement không.
+        Check if price is in a Fib retracement zone.
         
         Returns:
             (is_in_zone, zone_type)
@@ -1216,7 +1175,7 @@ class ScoringSystem:
                     vol_weight = 0.5
         
         if checklist.is_counter_trend:
-            reasons.append("⚠ COUNTER-TREND: Đánh ngược xu hướng H1")
+            reasons.append("⚠ COUNTER-TREND: Trading against H1 trend")
         
         # Add new tier info
         if checklist._confidence_score:

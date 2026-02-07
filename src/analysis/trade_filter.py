@@ -235,19 +235,19 @@ class TradeFilter:
         
         return True, "No filter"
     
-    def validate_strategy_direction(self, strategy: str, direction: str, checklist_score: int = 0) -> Tuple[bool, str]:
+    def validate_strategy_direction(self, strategy: str, direction: str, checklist_score: Optional[int] = 0) -> Tuple[bool, str]:
         """
         Validate if strategy-direction combination is allowed.
         
-        Based on TradeHistory2 analysis:
-        - SFP LONG: -3194.3% PnL => BLOCKED
+        Based on TradeHistory2+3 analysis:
+        - SFP LONG: -4118.8% PnL => BLOCKED
         - EMA_PULLBACK LONG: -995.5% PnL => BLOCKED
-        - BB_BOUNCE LONG: -575.7% PnL => BLOCKED
+        - BB_BOUNCE LONG: -658.3% PnL => BLOCKED
         
         Args:
             strategy: Strategy name (SFP, EMA_PULLBACK, etc.)
             direction: LONG or SHORT
-            checklist_score: 0-3 checklist score
+            checklist_score: 0-3 checklist score, or None for pre-check (let CONDITIONAL through)
         
         Returns:
             (allowed, reason)
@@ -265,6 +265,9 @@ class TradeFilter:
         
         # Handle conditional cases (require 3/3 checklist)
         if allowed == 'CONDITIONAL':
+            if checklist_score is None:
+                # Pre-check: allow through, will re-validate after scoring
+                return True, f"{strat_key} {dir_key} CONDITIONAL (pending checklist check)"
             if checklist_score >= 3:
                 return True, f"{strat_key} {dir_key} allowed with 3/3 checklist"
             else:
@@ -544,72 +547,4 @@ class SimplifiedIndicators:
         ]
 
 
-# ==================== Test ====================
-
-def test_trade_filter():
-    """Test trade filter."""
-    print("=" * 60)
-    print("Testing Trade Filter")
-    print("=" * 60)
-    
-    tf = TradeFilter()
-    
-    # Simulate BTC state
-    tf.update_btc_state(current_price=92000, price_15m_ago=92500)
-    print(f"\n📊 BTC Change: {tf._btc_change_pct:.2f}%")
-    print(f"   Is Dumping: {tf.is_btc_dumping()}")
-    
-    # Test filter for altcoin LONG (should be blocked)
-    result, reason, levels = tf.filter_trade(
-        symbol="DOGE-USDT",
-        direction=TradeDirection.LONG,
-        current_price=0.127,
-        ema89_h1=0.125,
-        atr=0.005
-    )
-    print(f"\n🐕 DOGE LONG:")
-    print(f"   Result: {result.value}")
-    print(f"   Reason: {reason}")
-    
-    # Test filter for BTC LONG (should pass, major coin)
-    tf.update_btc_state(current_price=92500, price_15m_ago=92000)  # BTC recovering
-    result, reason, levels = tf.filter_trade(
-        symbol="BTC-USDT",
-        direction=TradeDirection.LONG,
-        current_price=92500,
-        ema89_h1=91000,
-        atr=1500,
-        swing_high=95000
-    )
-    print(f"\n₿ BTC LONG:")
-    print(f"   Result: {result.value}")
-    print(f"   Reason: {reason}")
-    if levels:
-        print(f"   Entry: ${levels.entry:,.2f}")
-        print(f"   SL: ${levels.stop_loss:,.2f}")
-        print(f"   TP1: ${levels.take_profit_1:,.2f} (2R)")
-        print(f"   TP2: ${levels.take_profit_2:,.2f} (4R)")
-        print(f"   Leverage: {levels.leverage}x")
-        print(f"   Position: ${levels.position_size:,.2f}")
-        print(f"   Risk: ${levels.risk_usd:.2f}")
-        print(f"   Reward: ${levels.reward_usd:.2f}")
-        print(f"   R:R: 1:{levels.risk_reward}")
-        print(f"   Liquidation: ${levels.liquidation_price:,.2f}")
-    
-    # Test SHORT rejected by MTF
-    result, reason, levels = tf.filter_trade(
-        symbol="ETH-USDT",
-        direction=TradeDirection.SHORT,
-        current_price=3200,
-        ema89_h1=3100,  # Price above EMA = no short
-        atr=100
-    )
-    print(f"\n🔷 ETH SHORT:")
-    print(f"   Result: {result.value}")
-    print(f"   Reason: {reason}")
-    
-    print("\n✅ Trade Filter test complete!")
-
-
-if __name__ == "__main__":
-    test_trade_filter()
+# Singleton test removed - use pytest instead

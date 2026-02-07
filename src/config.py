@@ -83,10 +83,10 @@ class TimingConfig:
 @dataclass
 class RiskConfig:
     """Risk management settings."""
-    account_balance: float = float(os.getenv("ACCOUNT_BALANCE", 25.0))  # Tổng vốn mặc định $25
-    max_risk_per_trade: float = float(os.getenv("MAX_RISK_PER_TRADE", 1.0))  # Tối đa $1/lệnh
-    risk_per_trade_pct: float = 0.0  # Deprecated, dùng max_risk_per_trade
-    max_position_pct: float = 4.0  # 4% (tương đương $1/25$)
+    account_balance: float = float(os.getenv("ACCOUNT_BALANCE", 25.0))  # Default $25
+    max_risk_per_trade: float = float(os.getenv("MAX_RISK_PER_TRADE", 1.0))  # Max $1/trade
+    risk_per_trade_pct: float = 0.0  # Deprecated, use max_risk_per_trade
+    max_position_pct: float = 4.0  # 4% ($1 of $25)
     daily_max_loss_pct: float = float(os.getenv("DAILY_MAX_LOSS_PCT", 5.0))  # 5%
     weekly_max_loss_pct: float = float(os.getenv("WEEKLY_MAX_LOSS_PCT", 15.0))  # 15%
     btc_dump_threshold: float = float(os.getenv("BTC_DUMP_THRESHOLD", -1.0))  # -1%
