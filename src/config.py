@@ -133,8 +133,11 @@ class TradingConfig:
     # SHORT: 57.9% WR, +2433.5% PnL => PREFER
     prefer_short: bool = True
     block_sfp_long: bool = True        # SFP LONG: -3194.3% PnL
-    block_ema_pullback_long: bool = True  # EMA_PULLBACK LONG: -995.5% PnL
-    block_bb_bounce_long: bool = True  # BB_BOUNCE LONG: -575.7% PnL
+    
+    # === ICT LONG EXCEPTIONS ===
+    # Allow LONG for super-setups with 3+ ICT confluences
+    allow_silver_bullet_long_super: bool = True   # Silver Bullet super-setup LONG
+    allow_ict_reversal_long: bool = True           # ICT reversal LONG with dream setup
 
 
 @dataclass

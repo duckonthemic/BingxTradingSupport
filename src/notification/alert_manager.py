@@ -939,14 +939,13 @@ class AlertManager:
                 )
             
             # ========== STRATEGY-DIRECTION VALIDATION v3.0 ==========
-            # Based on TradeHistory2 analysis:
-            # - SFP LONG: -3194.3% PnL => BLOCKED
-            # - EMA_PULLBACK LONG: -995.5% PnL => BLOCKED
-            # - BB_BOUNCE LONG: -575.7% PnL => BLOCKED
+            # Based on TradeHistory2+3 analysis + ICT Dream Team rules
             strat_dir_allowed, strat_dir_reason = self.trade_filter.validate_strategy_direction(
                 strategy=best_setup.strategy.value,
                 direction=best_setup.direction,
-                  checklist_score=None  # Pre-check: let CONDITIONAL through, re-check after scoring
+                checklist_score=None,  # Pre-check: let CONDITIONAL through
+                is_super_setup=getattr(best_setup, 'is_super_setup', False),
+                ict_conditions_met=getattr(best_setup, 'ict_conditions_met', 0)
             )
             if not strat_dir_allowed:
                 self._stats["filtered_by_strategy_direction"] = self._stats.get("filtered_by_strategy_direction", 0) + 1
@@ -960,8 +959,8 @@ class AlertManager:
                     filter_reason=f"Strategy-Direction Block: {strat_dir_reason}"
                 )
             
-            # Check if this is a mean reversion strategy (skip MTF filter)
-            is_mean_reversion = best_setup.strategy.value in ["BB_BOUNCE", "SFP", "LIQ_SWEEP"]
+            # Check if this is a reversal strategy (skip MTF filter)
+            is_mean_reversion = best_setup.strategy.value in ["SFP", "LIQ_SWEEP", "SILVER_BULLET", "UNICORN", "TURTLE_SOUP"]
             
             # Calculate optimized levels
             filter_result, filter_reason, optimized = self.trade_filter.filter_trade(
@@ -987,8 +986,8 @@ class AlertManager:
                     filter_reason=filter_reason
                 )
             
-            # ========== SCORING SYSTEM v2.0 ==========
-            # Prepare indicators dict for scoring
+            # ========== SCORING SYSTEM v3.0 ==========
+            # Prepare indicators dict for scoring (including ICT confluence data)
             indicator_dict = {
                 'ema34_h1': indicators.ema34_h1,
                 'ema89_h1': indicators.ema89_h1,
@@ -1000,6 +999,14 @@ class AlertManager:
                 'volume_ratio': indicators.volume_ratio,
                 'bb_upper': indicators.bb_upper,
                 'in_ob_zone': best_setup.has_ob_confluence,
+                # ICT confluence fields from strategy enrichment
+                'has_bpr_confluence': getattr(best_setup, 'has_bpr_confluence', False),
+                'has_ifvg_confluence': getattr(best_setup, 'has_ifvg_confluence', False),
+                'is_kill_zone': getattr(best_setup, 'is_kill_zone', False),
+                'has_htf_poi': getattr(best_setup, 'has_htf_poi', False),
+                'is_judas_swing': getattr(best_setup, 'is_judas_swing', False),
+                'is_super_setup': getattr(best_setup, 'is_super_setup', False),
+                'ict_conditions_met': getattr(best_setup, 'ict_conditions_met', 0),
             }
             
             # Get swing levels
@@ -1037,11 +1044,13 @@ class AlertManager:
                     signal_grade=SignalGrade.D_REJECT
                 )
             
-            # Re-validate strategy-direction with checklist score (for CONDITIONAL strategies)
+            # Re-validate strategy-direction with checklist score + ICT super-setup
             strat_dir_allowed, strat_dir_reason = self.trade_filter.validate_strategy_direction(
                 strategy=best_setup.strategy.value,
                 direction=best_setup.direction,
-                checklist_score=checklist_score_num
+                checklist_score=checklist_score_num,
+                is_super_setup=getattr(best_setup, 'is_super_setup', False),
+                ict_conditions_met=getattr(best_setup, 'ict_conditions_met', 0)
             )
             if not strat_dir_allowed:
                 self._stats["filtered_by_strategy_direction"] = self._stats.get("filtered_by_strategy_direction", 0) + 1

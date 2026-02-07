@@ -1,16 +1,16 @@
 """
-Scoring System v2.0 - Confidence Matrix + Tier System + Rate Limiter
+Scoring System v3.0 - ICT Dream Team + Confidence Matrix + Tier System
 
 Scoring Matrix (Max 100):
-  Strategy: Pump Fade +30, SFP +25, EMA Alignment +20, etc.
+  Strategy: Pump Fade +30, SFP +25, Silver Bullet +30, Unicorn +30, Turtle Soup +28
+  ICT Confluence: BPR +15, IFVG +10, Kill Zone +10, HTF POI +12, Judas +8
   Confirm:  RSI Divergence +15, Volume Spike +10
   Penalty:  Counter-trend -25
+  Combos: Kill Shot +50, ICT Confluence +20, Dream Setup +35
 
 Tiers: DIAMOND (>=70), GOLD (>=40), SILVER (>=35), REJECT (<35)
 
 Rate Limiter: 8 alerts/hour, tightens at 4+ and 6+.
-
-Combos: Kill Shot (SS+SFP) +50, Insurance (SS+RSI Div) +15
 """
 
 import logging
@@ -52,14 +52,23 @@ TIER_VOLUME_WEIGHT = {
 # --- Scoring Constants ---
 
 SCORE_POINTS = {
-    # Strategy Points
+    # Strategy Points (kept)
     'pump_fade': 30,           # Pump Fade / Shooting Star
     'sfp': 25,                 # Swing Failure Pattern
-    'bb_bounce': 30,           # BB Bounce (sideways market)
     'ema_alignment': 20,       # EMA Trend Alignment
     'liquidity_sweep': 25,     # Liquidity Sweep
-    'breaker_retest': 20,      # Breaker Block Retest
-    'ema_pullback': 15,        # EMA Pullback
+    
+    # ICT Strategy Points (new)
+    'silver_bullet': 30,       # ICT Silver Bullet
+    'unicorn_model': 30,       # ICT Unicorn Model
+    'turtle_soup': 28,         # ICT Turtle Soup
+    
+    # ICT Confluence Points (new)
+    'bpr_confluence': 15,      # Balanced Price Range confluence
+    'ifvg_confluence': 10,     # Inverse FVG confluence
+    'kill_zone_timing': 10,    # Kill zone timing window
+    'htf_poi_alignment': 12,   # HTF POI alignment
+    'judas_swing': 8,          # Judas Swing sub-mode active
     
     # Confirmation Points
     'rsi_divergence': 15,      # RSI Divergence
@@ -77,6 +86,11 @@ SCORE_POINTS = {
     # Bonus Combos
     'kill_shot_bonus': 50,     # Shooting Star + SFP = Kill Shot
     'insurance_bonus': 15,     # Shooting Star + RSI Div
+    
+    # ICT Combo Bonuses (new)
+    'ict_confluence_bonus': 20,  # Multiple ICT confluences stacked
+    'dream_setup_bonus': 35,    # Super setup (3+ ICT conditions)
+    'htf_mtf_alignment': 15,    # HTF + MTF trend alignment
 }
 
 # Tier thresholds (bear market optimized)
@@ -137,12 +151,20 @@ class ConfidenceScore:
     wavetrend_points: int = 0
     ob_confluence_points: int = 0
     
+    # === ICT CONFLUENCE POINTS (new) ===
+    bpr_confluence_points: int = 0
+    ifvg_confluence_points: int = 0
+    kill_zone_timing_points: int = 0
+    htf_poi_alignment_points: int = 0
+    judas_swing_points: int = 0
+    
     # === PENALTY ===
     counter_trend_penalty: int = 0
     
     # === BONUS ===
     kill_shot_bonus: int = 0
     insurance_bonus: int = 0
+    ict_combo_bonus: int = 0
     
     # === DETAILS ===
     breakdown: List[str] = field(default_factory=list)
@@ -169,15 +191,21 @@ class ConfidenceScore:
             self.volume_spike_points +
             self.wavetrend_points +
             self.ob_confluence_points +
+            self.bpr_confluence_points +
+            self.ifvg_confluence_points +
+            self.kill_zone_timing_points +
+            self.htf_poi_alignment_points +
+            self.judas_swing_points +
             self.counter_trend_penalty +
             self.kill_shot_bonus +
-            self.insurance_bonus
+            self.insurance_bonus +
+            self.ict_combo_bonus
         )
         return min(max(raw_score, 0), 100)
     
     @property
     def confirmation_count(self) -> int:
-        """Count number of confirmations (v2.1 - for quality check)."""
+        """Count number of confirmations (v3.0 - ICT aware)."""
         count = 0
         if self.rsi_divergence_points > 0:
             count += 1
@@ -191,6 +219,15 @@ class ConfidenceScore:
             count += 1
         if self.is_kill_shot:
             count += 2  # Kill shot counts as 2 confirmations
+        # ICT confluence confirmations
+        if self.bpr_confluence_points > 0:
+            count += 1
+        if self.ifvg_confluence_points > 0:
+            count += 1
+        if self.kill_zone_timing_points > 0:
+            count += 1
+        if self.htf_poi_alignment_points > 0:
+            count += 1
         return count
     
     @property
@@ -677,9 +714,9 @@ class ScoringSystem:
         
         # Check counter-trend penalty
         # REVERSAL strategies are MEANT to be counter-trend - don't penalize them
-        # SFP, PUMP_FADE, BB_BOUNCE, LIQUIDITY_SWEEP are all reversal strategies
         strategy_str = str(setup_type).upper() if setup_type else ""
-        reversal_strategies = ["SFP", "PUMP_FADE", "BB_BOUNCE", "LIQUIDITY_SWEEP", "SHOOTING_STAR"]
+        reversal_strategies = ["SFP", "PUMP_FADE", "LIQUIDITY_SWEEP", "SHOOTING_STAR",
+                               "SILVER_BULLET", "UNICORN", "TURTLE_SOUP"]
         is_reversal_strategy = any(s in strategy_str for s in reversal_strategies)
         
         is_counter = (
@@ -687,43 +724,22 @@ class ScoringSystem:
             (h1_trend == "BEARISH" and detected_direction == "LONG")
         )
         
-        # Only penalize counter-trend for TREND-FOLLOWING strategies (EMA_PULLBACK, BREAKER_RETEST)
+        # Only penalize counter-trend for pure trend-following strategies
         if is_counter and not is_reversal_strategy:
             score.is_counter_trend = True
             score.counter_trend_penalty = SCORE_POINTS['counter_trend']
             score.breakdown.append(f"⚠️ Counter-Trend: {SCORE_POINTS['counter_trend']} pts")
         
-        # === 4. OTHER STRATEGY POINTS (v2.1 - stricter BB_BOUNCE) ===
-        # Handle different strategy formats (enum value, string, etc.)
-        
-        if "BB_BOUNCE" in strategy_str:
-            # BB Bounce needs RSI confirmation to be valid (v2.1)
-            rsi = indicators.get('rsi', 50)
-            is_rsi_extreme = (
-                (detected_direction == "LONG" and rsi < 35) or  # Oversold
-                (detected_direction == "SHORT" and rsi > 65)    # Overbought
-            )
-            
-            if is_rsi_extreme:
-                # Full points for RSI-confirmed BB Bounce
-                score.other_strategy_points = SCORE_POINTS['bb_bounce']
-                score.breakdown.append(f"✅ BB Bounce + RSI: +{SCORE_POINTS['bb_bounce']} pts")
-            else:
-                # Reduced points for BB Bounce without RSI extreme
-                score.other_strategy_points = SCORE_POINTS['bb_bounce'] - 15  # 15 instead of 30
-                score.breakdown.append(f"⚠️ BB Bounce (weak RSI): +{SCORE_POINTS['bb_bounce'] - 15} pts")
-                
-        elif "BREAKER_RETEST" in strategy_str:
-            score.other_strategy_points = SCORE_POINTS['breaker_retest']
-            score.breakdown.append(f"✅ Breaker Retest: +{SCORE_POINTS['breaker_retest']} pts")
-        elif "EMA_PULLBACK" in strategy_str:
-            # EMA Pullback needs trend alignment (v2.1)
-            if is_aligned:
-                score.other_strategy_points = SCORE_POINTS['ema_pullback']
-                score.breakdown.append(f"✅ EMA Pullback: +{SCORE_POINTS['ema_pullback']} pts")
-            else:
-                # No points for counter-trend EMA pullback
-                score.breakdown.append(f"❌ EMA Pullback (wrong trend): +0 pts")
+        # === 4. ICT STRATEGY POINTS ===
+        if "SILVER_BULLET" in strategy_str:
+            score.other_strategy_points = SCORE_POINTS['silver_bullet']
+            score.breakdown.append(f"🎯 Silver Bullet: +{SCORE_POINTS['silver_bullet']} pts")
+        elif "UNICORN" in strategy_str:
+            score.other_strategy_points = SCORE_POINTS['unicorn_model']
+            score.breakdown.append(f"🦄 Unicorn Model: +{SCORE_POINTS['unicorn_model']} pts")
+        elif "TURTLE_SOUP" in strategy_str:
+            score.other_strategy_points = SCORE_POINTS['turtle_soup']
+            score.breakdown.append(f"🐢 Turtle Soup: +{SCORE_POINTS['turtle_soup']} pts")
         
         # === 5. CONFIRMATION POINTS ===
         if has_rsi_divergence and not score.is_pump_fade:
@@ -742,17 +758,49 @@ class ScoringSystem:
             score.ob_confluence_points = SCORE_POINTS['ob_confluence']
             score.breakdown.append(f"✅ OB Confluence: +{SCORE_POINTS['ob_confluence']} pts")
         
-        # === 6. BB_BOUNCE BONUS - extra points for mean reversion setup ===
-        if "BB_BOUNCE" in strategy_str:
-            # Give +15 bonus for mean reversion (always, as BB_BOUNCE is valid strategy)
-            score.insurance_bonus = 15
-            score.breakdown.append(f"✅ BB Mean Reversion: +15 pts")
-            
-            # Additional +10 for RSI extreme
-            rsi = indicators.get('rsi', 50)
-            if (detected_direction == "LONG" and rsi < 45) or (detected_direction == "SHORT" and rsi > 55):
-                score.ob_confluence_points = 10  # Re-use this field for RSI bonus
-                score.breakdown.append(f"✅ BB RSI Confirm: +10 pts")
+        # === 6. ICT CONFLUENCE SCORING ===
+        # These read from TradeSetup fields passed via indicators dict
+        setup_has_bpr = indicators.get('has_bpr_confluence', False)
+        setup_has_ifvg = indicators.get('has_ifvg_confluence', False)
+        setup_is_kill_zone = indicators.get('is_kill_zone', False)
+        setup_has_htf_poi = indicators.get('has_htf_poi', False)
+        setup_is_judas = indicators.get('is_judas_swing', False)
+        setup_is_super = indicators.get('is_super_setup', False)
+        ict_conditions = indicators.get('ict_conditions_met', 0)
+        
+        if setup_has_bpr:
+            score.bpr_confluence_points = SCORE_POINTS['bpr_confluence']
+            score.breakdown.append(f"✅ BPR Confluence: +{SCORE_POINTS['bpr_confluence']} pts")
+        
+        if setup_has_ifvg:
+            score.ifvg_confluence_points = SCORE_POINTS['ifvg_confluence']
+            score.breakdown.append(f"✅ IFVG Confluence: +{SCORE_POINTS['ifvg_confluence']} pts")
+        
+        if setup_is_kill_zone:
+            score.kill_zone_timing_points = SCORE_POINTS['kill_zone_timing']
+            score.breakdown.append(f"✅ Kill Zone Timing: +{SCORE_POINTS['kill_zone_timing']} pts")
+        
+        if setup_has_htf_poi:
+            score.htf_poi_alignment_points = SCORE_POINTS['htf_poi_alignment']
+            score.breakdown.append(f"✅ HTF POI Alignment: +{SCORE_POINTS['htf_poi_alignment']} pts")
+        
+        if setup_is_judas:
+            score.judas_swing_points = SCORE_POINTS['judas_swing']
+            score.breakdown.append(f"✅ Judas Swing: +{SCORE_POINTS['judas_swing']} pts")
+        
+        # ICT combo bonuses
+        if ict_conditions >= 3:
+            score.ict_combo_bonus = SCORE_POINTS['dream_setup_bonus']
+            score.breakdown.append(f"🌟 Dream Setup ({ict_conditions} ICT): +{SCORE_POINTS['dream_setup_bonus']} pts")
+        elif ict_conditions >= 2:
+            score.ict_combo_bonus = SCORE_POINTS['ict_confluence_bonus']
+            score.breakdown.append(f"⚡ ICT Confluence ({ict_conditions}): +{SCORE_POINTS['ict_confluence_bonus']} pts")
+        
+        # HTF + MTF alignment bonus
+        is_ict_strategy = any(s in strategy_str for s in ["SILVER_BULLET", "UNICORN", "TURTLE_SOUP"])
+        if is_ict_strategy and is_aligned and setup_has_htf_poi:
+            score.ict_combo_bonus += SCORE_POINTS['htf_mtf_alignment']
+            score.breakdown.append(f"✅ HTF+MTF Alignment: +{SCORE_POINTS['htf_mtf_alignment']} pts")
         
         # === SUMMARY ===
         score.breakdown.append(f"━━━━━━━━━━━━━━━━━━━━━")
@@ -894,7 +942,7 @@ class ScoringSystem:
                 else:
                     score.trigger_detail += " + Fib 0.5-0.618 Zone"
         
-        if setup_type in ["BREAKER_RETEST", "EMA_PULLBACK"]:
+        if setup_type in ["BREAKER_RETEST", "EMA_PULLBACK", "SILVER_BULLET", "UNICORN", "TURTLE_SOUP"]:
             score.retest_zone_score = 1
             score.trigger_detail = f"Trigger: {setup_type} detected"
         

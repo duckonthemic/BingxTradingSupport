@@ -82,9 +82,10 @@ class OptimizedLevels:
 # === STRATEGY-DIRECTION RULES (Based on TradeHistory2 Analysis) ===
 # SFP LONG: 35.7% WR, -3194.3% PnL => BLOCK
 # SFP SHORT: 60.6% WR, +531.5% PnL => ALLOW
-# EMA_PULLBACK LONG: 33.3% WR, -995.5% PnL => BLOCK
-# EMA_PULLBACK SHORT: 54.8% WR, +793.9% PnL => ALLOW
-# BB_BOUNCE LONG: 30.0% WR, -575.7% PnL => BLOCK
+# EMA_PULLBACK / BB_BOUNCE / BREAKER_RETEST: REMOVED (replaced by ICT strategies)
+# SILVER_BULLET LONG: CONDITIONAL (super-setup only, 3+ ICT confluences)
+# UNICORN LONG: CONDITIONAL (super-setup only)
+# TURTLE_SOUP LONG: CONDITIONAL (super-setup only)
 # LIQ_SWEEP SHORT: 73.3% WR, +791.0% PnL => PRIORITIZE
 
 STRATEGY_DIRECTION_RULES = {
@@ -92,21 +93,21 @@ STRATEGY_DIRECTION_RULES = {
         'LONG': False,   # 🚫 BLOCKED (-3194.3% PnL, 35.7% WR)
         'SHORT': True,   # ✅ ALLOWED (+531.5% PnL, 60.6% WR)
     },
-    'EMA_PULLBACK': {
-        'LONG': False,   # 🚫 BLOCKED (-995.5% PnL, 33.3% WR)
-        'SHORT': True,   # ✅ ALLOWED (+793.9% PnL, 54.8% WR)
-    },
     'LIQ_SWEEP': {
         'LONG': 'CONDITIONAL',  # ⚠️ Only with 3/3 checklist
         'SHORT': True,          # ✅ PRIORITIZE (+791.0% PnL, 73.3% WR)
     },
-    'BB_BOUNCE': {
-        'LONG': False,   # 🚫 BLOCKED (-575.7% PnL, 30.0% WR)
-        'SHORT': True,   # ⚠️ ALLOWED (+111.6% PnL)
+    'SILVER_BULLET': {
+        'LONG': 'CONDITIONAL',  # ⚠️ Only super-setup (3+ ICT confluences)
+        'SHORT': True,          # ✅ ALLOWED
     },
-    'BREAKER_RETEST': {
-        'LONG': 'CONDITIONAL',  # ⚠️ Only with 3/3 checklist
-        'SHORT': True,          # ✅ ALLOWED (+195.3% PnL, 69.2% WR)
+    'UNICORN': {
+        'LONG': 'CONDITIONAL',  # ⚠️ Only super-setup (3+ ICT confluences)
+        'SHORT': True,          # ✅ ALLOWED
+    },
+    'TURTLE_SOUP': {
+        'LONG': 'CONDITIONAL',  # ⚠️ Only super-setup (3+ ICT confluences)
+        'SHORT': True,          # ✅ ALLOWED
     },
     'IE': {
         'LONG': 'CONDITIONAL',  # ⚠️ Only with 3/3 checklist
@@ -235,19 +236,20 @@ class TradeFilter:
         
         return True, "No filter"
     
-    def validate_strategy_direction(self, strategy: str, direction: str, checklist_score: Optional[int] = 0) -> Tuple[bool, str]:
+    def validate_strategy_direction(self, strategy: str, direction: str, checklist_score: Optional[int] = 0, is_super_setup: bool = False, ict_conditions_met: int = 0) -> Tuple[bool, str]:
         """
         Validate if strategy-direction combination is allowed.
         
-        Based on TradeHistory2+3 analysis:
+        Based on TradeHistory2+3 analysis + ICT Dream Team rules:
         - SFP LONG: -4118.8% PnL => BLOCKED
-        - EMA_PULLBACK LONG: -995.5% PnL => BLOCKED
-        - BB_BOUNCE LONG: -658.3% PnL => BLOCKED
+        - ICT strategies LONG: CONDITIONAL (super-setup with 3+ ICT confluences)
         
         Args:
-            strategy: Strategy name (SFP, EMA_PULLBACK, etc.)
+            strategy: Strategy name (SFP, SILVER_BULLET, etc.)
             direction: LONG or SHORT
-            checklist_score: 0-3 checklist score, or None for pre-check (let CONDITIONAL through)
+            checklist_score: 0-3 checklist score, or None for pre-check
+            is_super_setup: True if setup has 3+ ICT confluences
+            ict_conditions_met: Number of ICT conditions met
         
         Returns:
             (allowed, reason)
@@ -263,11 +265,21 @@ class TradeFilter:
         
         allowed = rules.get(dir_key, True)
         
-        # Handle conditional cases (require 3/3 checklist)
+        # Handle conditional cases
         if allowed == 'CONDITIONAL':
             if checklist_score is None:
                 # Pre-check: allow through, will re-validate after scoring
-                return True, f"{strat_key} {dir_key} CONDITIONAL (pending checklist check)"
+                return True, f"{strat_key} {dir_key} CONDITIONAL (pending check)"
+            
+            # ICT strategies: allow LONG if super-setup (3+ ICT confluences)
+            ict_strategies = ['SILVER_BULLET', 'UNICORN', 'TURTLE_SOUP']
+            if strat_key in ict_strategies and dir_key == 'LONG':
+                if is_super_setup or ict_conditions_met >= 3:
+                    return True, f"{strat_key} LONG super-setup ({ict_conditions_met} ICT confluences)"
+                else:
+                    return False, f"{strat_key} LONG requires super-setup (have {ict_conditions_met} ICT, need 3+)"
+            
+            # Non-ICT conditional: require 3/3 checklist
             if checklist_score >= 3:
                 return True, f"{strat_key} {dir_key} allowed with 3/3 checklist"
             else:

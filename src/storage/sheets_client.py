@@ -1202,13 +1202,14 @@ class GoogleSheetsClient:
         try:
             all_data = self.sheet.get_all_values()
             
-            # Initialize stats by strategy
+            # Initialize stats by strategy (ICT Dream Team v3.1)
             strategies = {
-                "EMA_PULLBACK": {"trades": 0, "wins": 0, "losses": 0, "pnl": 0.0},
-                "BB_BOUNCE": {"trades": 0, "wins": 0, "losses": 0, "pnl": 0.0},
-                "IE": {"trades": 0, "wins": 0, "losses": 0, "pnl": 0.0},
-                "LIQ_SWEEP": {"trades": 0, "wins": 0, "losses": 0, "pnl": 0.0},
                 "SFP": {"trades": 0, "wins": 0, "losses": 0, "pnl": 0.0},
+                "LIQ_SWEEP": {"trades": 0, "wins": 0, "losses": 0, "pnl": 0.0},
+                "SILVER_BULLET": {"trades": 0, "wins": 0, "losses": 0, "pnl": 0.0},
+                "UNICORN": {"trades": 0, "wins": 0, "losses": 0, "pnl": 0.0},
+                "TURTLE_SOUP": {"trades": 0, "wins": 0, "losses": 0, "pnl": 0.0},
+                "IE": {"trades": 0, "wins": 0, "losses": 0, "pnl": 0.0},
             }
             
             # Parse all trades
@@ -1222,22 +1223,29 @@ class GoogleSheetsClient:
                     # Get strategy from Note column (M = index 12)
                     note = row[12] if len(row) > 12 else ""
                     
-                    # Determine strategy
+                    # Determine strategy (ICT Dream Team v3.1)
                     strategy = None
                     note_upper = note.upper()
-                    if "IE" in note_upper or "IE TRADE" in note_upper:
-                        strategy = "IE"
-                    elif "EMA" in note_upper or "PULLBACK" in note_upper:
-                        strategy = "EMA_PULLBACK"
-                    elif "BB" in note_upper or "BOUNCE" in note_upper:
-                        strategy = "BB_BOUNCE"
+                    if "SILVER" in note_upper or "SILVER_BULLET" in note_upper:
+                        strategy = "SILVER_BULLET"
+                    elif "UNICORN" in note_upper:
+                        strategy = "UNICORN"
+                    elif "TURTLE" in note_upper or "TURTLE_SOUP" in note_upper:
+                        strategy = "TURTLE_SOUP"
                     elif "LIQ" in note_upper or "SWEEP" in note_upper:
                         strategy = "LIQ_SWEEP"
                     elif "SFP" in note_upper or "BREAKER" in note_upper:
                         strategy = "SFP"
+                    elif "IE" in note_upper or "IE TRADE" in note_upper:
+                        strategy = "IE"
                     else:
-                        # Default to EMA_PULLBACK if can't determine
-                        strategy = "EMA_PULLBACK"
+                        # Legacy fallback for old trades
+                        if "EMA" in note_upper or "PULLBACK" in note_upper:
+                            strategy = "SFP"  # Map old EMA_PULLBACK to SFP
+                        elif "BB" in note_upper or "BOUNCE" in note_upper:
+                            strategy = "LIQ_SWEEP"  # Map old BB_BOUNCE to LIQ_SWEEP
+                        else:
+                            strategy = "SFP"  # Default
                     
                     # Get PnL
                     pnl_str = row[9] if len(row) > 9 else "0"
@@ -1258,8 +1266,8 @@ class GoogleSheetsClient:
                 ["", "Total trade", "Winrate", "PnL(%)", "Pnl(usd)"],  # Header
             ]
             
-            # Strategy rows
-            strategy_order = ["EMA_PULLBACK", "BB_BOUNCE", "IE", "LIQ_SWEEP", "SFP"]
+            # Strategy rows (ICT Dream Team v3.1)
+            strategy_order = ["SFP", "LIQ_SWEEP", "SILVER_BULLET", "UNICORN", "TURTLE_SOUP", "IE"]
             for strat in strategy_order:
                 stats = strategies[strat]
                 trades = stats["trades"]
@@ -1296,8 +1304,8 @@ class GoogleSheetsClient:
                 f"${total_pnl_usd:.2f}"
             ])
             
-            # Update table at T6:X12 (7 rows: header + 5 strategies + TOTAL)
-            self.sheet.update('T6:X12', table_data)
+            # Update table at T6:X13 (8 rows: header + 6 strategies + TOTAL)
+            self.sheet.update('T6:X13', table_data)
             
             # Format the stats table
             self._format_stats_table()
@@ -1308,7 +1316,7 @@ class GoogleSheetsClient:
             logger.error(f"Error updating stats table: {e}")
     
     def _format_stats_table(self):
-        """Format the statistics table at T6:X12 (including TOTAL row)."""
+        """Format the statistics table at T6:X13 (including TOTAL row)."""
         try:
             sheet_id = self.sheet.id
             
@@ -1334,13 +1342,13 @@ class GoogleSheetsClient:
                         "fields": "userEnteredFormat(backgroundColor,textFormat,horizontalAlignment)"
                     }
                 },
-                # Strategy names column bold
+                # Strategy names column bold (rows 7-12 = 6 strategies)
                 {
                     "repeatCell": {
                         "range": {
                             "sheetId": sheet_id,
-                            "startRowIndex": 6,  # Row 7-11
-                            "endRowIndex": 11,
+                            "startRowIndex": 6,  # Row 7-12
+                            "endRowIndex": 12,
                             "startColumnIndex": 19,  # Column T
                             "endColumnIndex": 20
                         },
@@ -1352,13 +1360,13 @@ class GoogleSheetsClient:
                         "fields": "userEnteredFormat(textFormat)"
                     }
                 },
-                # TOTAL row with bold and background (Row 12)
+                # TOTAL row with bold and background (Row 13)
                 {
                     "repeatCell": {
                         "range": {
                             "sheetId": sheet_id,
-                            "startRowIndex": 11,  # Row 12 (0-indexed)
-                            "endRowIndex": 12,
+                            "startRowIndex": 12,  # Row 13 (0-indexed)
+                            "endRowIndex": 13,
                             "startColumnIndex": 19,  # Column T
                             "endColumnIndex": 24   # Column X
                         },
@@ -1372,13 +1380,13 @@ class GoogleSheetsClient:
                         "fields": "userEnteredFormat(backgroundColor,textFormat,horizontalAlignment)"
                     }
                 },
-                # Add borders (now includes row 12)
+                # Add borders (T6:X13)
                 {
                     "updateBorders": {
                         "range": {
                             "sheetId": sheet_id,
                             "startRowIndex": 5,
-                            "endRowIndex": 12,  # Changed from 11 to 12
+                            "endRowIndex": 13,
                             "startColumnIndex": 19,
                             "endColumnIndex": 24
                         },

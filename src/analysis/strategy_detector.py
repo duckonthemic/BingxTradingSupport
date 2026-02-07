@@ -25,44 +25,48 @@ import logging
 from dataclasses import dataclass, field
 from typing import List, Optional, Dict, Tuple
 from enum import Enum
+from datetime import datetime, timezone
 import pandas as pd
 import numpy as np
+
+from .poi_manager import POIManager, POI, POIType
+from .fvg_bridge import FVGBridge
 
 logger = logging.getLogger(__name__)
 
 
 class StrategyType(Enum):
-    """Active trading strategies."""
+    """Active trading strategies — Dream Team v2.0."""
     SFP = "SFP"                          # Swing Failure Pattern (MAIN)
     LIQUIDITY_SWEEP = "LIQ_SWEEP"        # Liquidity Sweep (MAIN)
-    EMA_PULLBACK = "EMA_PULLBACK"        # EMA Cloud Pullback (SUPPORT)
-    BREAKER_RETEST = "BREAKER_RETEST"    # Breaker Block Retest (SUPPORT)
-    BB_BOUNCE = "BB_BOUNCE"              # Bollinger Band Bounce (RANGE)
+    SILVER_BULLET = "SILVER_BULLET"      # ICT Silver Bullet + Judas Swing (TIME-BASED)
+    UNICORN = "UNICORN"                  # ICT Unicorn Model: Breaker + FVG (STRUCTURE)
+    TURTLE_SOUP = "TURTLE_SOUP"          # ICT Turtle Soup: HTF False Breakout (REVERSAL)
 
 
 STRATEGY_ICONS = {
     StrategyType.SFP: "🔄",
     StrategyType.LIQUIDITY_SWEEP: "🌊",
-    StrategyType.EMA_PULLBACK: "☁️",
-    StrategyType.BREAKER_RETEST: "💥",
-    StrategyType.BB_BOUNCE: "📊",
+    StrategyType.SILVER_BULLET: "🎯",
+    StrategyType.UNICORN: "🦄",
+    StrategyType.TURTLE_SOUP: "🐢",
 }
 
 STRATEGY_NAMES = {
     StrategyType.SFP: "Swing Failure Pattern",
     StrategyType.LIQUIDITY_SWEEP: "Liquidity Sweep",
-    StrategyType.EMA_PULLBACK: "EMA Cloud Pullback",
-    StrategyType.BREAKER_RETEST: "Breaker Block Retest",
-    StrategyType.BB_BOUNCE: "BB Bounce Range",
+    StrategyType.SILVER_BULLET: "ICT Silver Bullet",
+    StrategyType.UNICORN: "ICT Unicorn Model",
+    StrategyType.TURTLE_SOUP: "ICT Turtle Soup",
 }
 
 # Volume allocation per strategy
 STRATEGY_VOLUME_WEIGHT = {
     StrategyType.SFP: 1.0,              # 100% standard volume
     StrategyType.LIQUIDITY_SWEEP: 1.0,  # 100% standard volume
-    StrategyType.EMA_PULLBACK: 0.7,     # 70% volume (wider SL)
-    StrategyType.BREAKER_RETEST: 0.8,   # 80% volume
-    StrategyType.BB_BOUNCE: 0.5,        # 50% volume (mean reversion)
+    StrategyType.SILVER_BULLET: 1.0,    # 100% (time-confirmed ICT)
+    StrategyType.UNICORN: 0.9,          # 90% (structure-based)
+    StrategyType.TURTLE_SOUP: 0.9,      # 90% (HTF reversal)
 }
 
 
@@ -104,6 +108,15 @@ class TradeSetup:
     
     # Volume weight
     volume_weight: float = 1.0
+    
+    # ICT-specific fields
+    is_kill_zone: bool = False          # Trade in ICT kill zone window
+    has_htf_poi: bool = False           # Aligned with H1/H4 POI level
+    has_bpr_confluence: bool = False    # Entry at BPR zone
+    has_ifvg_confluence: bool = False   # Entry at Inverse FVG level
+    is_super_setup: bool = False        # Qualifies for LONG exception
+    is_judas_swing: bool = False        # Judas Swing variant detected
+    ict_conditions_met: int = 0         # Count of ICT conditions met
     
     @property
     def icon(self) -> str:
@@ -182,12 +195,19 @@ class MomentumConfirm:
 
 class StrategyDetector:
     """
-    Optimized Strategy Detector for High Win Rate.
+    Strategy Detector v3.0 — ICT Dream Team.
+    
+    5 Strategies:
+    1. SFP (Swing Failure Pattern) — reversal
+    2. Liquidity Sweep — momentum
+    3. Silver Bullet + Judas — time-based ICT
+    4. Unicorn Model — structure ICT (Breaker + FVG)
+    5. Turtle Soup — HTF false breakout
     
     Logic Flow:
     1. Check H1 Trend Filter (EMA34/89)
-    2. Detect setups on M5/M15
-    3. Confirm with momentum (WT + Volume + RSI Divergence)
+    2. Detect setups on M5/M15 with POI alignment
+    3. Confirm with momentum + ICT conditions
     """
     
     def __init__(self):
@@ -195,6 +215,21 @@ class StrategyDetector:
         self.entry_proximity = 0.003  # 0.3% for actionable
         self.min_rr = 2.0  # Minimum 2:1 R:R
         self.ema_gap_strong = 0.5  # 0.5% gap = strong trend
+        
+        # ICT components
+        self.poi_manager = POIManager()
+        self.fvg_bridge = FVGBridge()
+        
+        # ICT Kill Zone windows (UTC hours)
+        # Silver Bullet AM: 15:00-16:00 UTC (10-11 AM EST)
+        # Silver Bullet PM: 19:00-20:00 UTC (2-3 PM EST)
+        # Judas Swing: 07:00-07:30 UTC (EU Open)
+        self.sb_am_start = 15
+        self.sb_am_end = 16
+        self.sb_pm_start = 19
+        self.sb_pm_end = 20
+        self.judas_start = 7
+        self.judas_end_minute = 30  # 07:00-07:30
     
     def analyze(
         self,
@@ -210,13 +245,17 @@ class StrategyDetector:
         volume_ratio: float = 1.0
     ) -> List[TradeSetup]:
         """
-        Analyze and return valid setups.
-        Only returns setups that pass all 3 filters.
+        Analyze and return valid setups using Dream Team v3.0.
+        Only returns setups that pass all filters.
         """
         setups = []
         
         if df_h1.empty or len(df_h1) < 50:
             return setups
+        
+        # --- Phase 1: Foundation ---
+        # Update POI levels for this symbol
+        self.poi_manager.update(symbol, df_h1)
         
         # Step 1: H1 Trend Filter
         trend_filter = self._check_trend_filter(df_h1, current_price)
@@ -233,13 +272,16 @@ class StrategyDetector:
         # Step 3: Find Order Block zones (for confluence only)
         ob_zones = self._find_order_blocks(df_h1)
         
-        # Step 4: Detect setups based on allowed direction
+        # Step 4: Get current UTC time for kill zone checks
+        utc_now = datetime.now(timezone.utc)
+        
+        # Step 5: Detect setups based on allowed direction
         allowed = trend_filter.allowed_direction
         
-        # LONG setups - when LONG or BOTH_BULLISH_BIAS or BOTH_BEARISH_BIAS
+        # --- LONG setups ---
         if allowed in ["LONG", "BOTH_BULLISH_BIAS", "BOTH_BEARISH_BIAS"]:
+            # Core strategies (kept)
             if setup := self._detect_sfp_long(symbol, df_m5, df_h1, current_price, atr, momentum, ob_zones):
-                # Reduce confidence if counter-trend
                 if allowed == "BOTH_BEARISH_BIAS":
                     setup.confidence *= 0.85
                     setup.reasons.append("⚠️ Counter-trend (EMA bearish)")
@@ -251,20 +293,26 @@ class StrategyDetector:
                     setup.reasons.append("⚠️ Counter-trend (EMA bearish)")
                 setups.append(setup)
             
-            if trend_filter.is_strong_trend or allowed == "LONG":
-                if setup := self._detect_ema_pullback_long(symbol, df_m5, df_h1, current_price, atr, trend_filter, momentum):
-                    setups.append(setup)
-            
-            if setup := self._detect_breaker_retest_long(symbol, df_m5, df_h1, current_price, atr, momentum):
+            # New ICT strategies
+            if setup := self._detect_silver_bullet_long(symbol, df_m5, df_m15, current_price, atr, momentum, utc_now):
                 if allowed == "BOTH_BEARISH_BIAS":
                     setup.confidence *= 0.85
-                    setup.reasons.append("⚠️ Counter-trend (EMA bearish)")
+                setups.append(setup)
+            
+            if setup := self._detect_unicorn_long(symbol, df_m5, df_h1, current_price, atr, momentum):
+                if allowed == "BOTH_BEARISH_BIAS":
+                    setup.confidence *= 0.85
+                setups.append(setup)
+            
+            if setup := self._detect_turtle_soup_long(symbol, df_m5, df_h1, current_price, atr, momentum):
+                if allowed == "BOTH_BEARISH_BIAS":
+                    setup.confidence *= 0.85
                 setups.append(setup)
         
-        # SHORT setups - when SHORT or BOTH_BULLISH_BIAS or BOTH_BEARISH_BIAS
+        # --- SHORT setups ---
         if allowed in ["SHORT", "BOTH_BULLISH_BIAS", "BOTH_BEARISH_BIAS"]:
+            # Core strategies (kept)
             if setup := self._detect_sfp_short(symbol, df_m5, df_h1, current_price, atr, momentum, ob_zones):
-                # Reduce confidence if counter-trend
                 if allowed == "BOTH_BULLISH_BIAS":
                     setup.confidence *= 0.85
                     setup.reasons.append("⚠️ Counter-trend (EMA bullish)")
@@ -276,29 +324,26 @@ class StrategyDetector:
                     setup.reasons.append("⚠️ Counter-trend (EMA bullish)")
                 setups.append(setup)
             
-            if trend_filter.is_strong_trend or allowed == "SHORT":
-                if setup := self._detect_ema_pullback_short(symbol, df_m5, df_h1, current_price, atr, trend_filter, momentum):
-                    setups.append(setup)
-            
-            if setup := self._detect_breaker_retest_short(symbol, df_m5, df_h1, current_price, atr, momentum):
+            # New ICT strategies
+            if setup := self._detect_silver_bullet_short(symbol, df_m5, df_m15, current_price, atr, momentum, utc_now):
                 if allowed == "BOTH_BULLISH_BIAS":
                     setup.confidence *= 0.85
-                    setup.reasons.append("⚠️ Counter-trend (EMA bullish)")
+                setups.append(setup)
+            
+            if setup := self._detect_unicorn_short(symbol, df_m5, df_h1, current_price, atr, momentum):
+                if allowed == "BOTH_BULLISH_BIAS":
+                    setup.confidence *= 0.85
+                setups.append(setup)
+            
+            if setup := self._detect_turtle_soup_short(symbol, df_m5, df_h1, current_price, atr, momentum):
+                if allowed == "BOTH_BULLISH_BIAS":
+                    setup.confidence *= 0.85
                 setups.append(setup)
         
-        # BEARISH CONTINUATION - Simple trend following for bearish market
-        if allowed in ["SHORT", "BOTH_BEARISH_BIAS"]:
-            if setup := self._detect_bearish_continuation(symbol, df_m5, df_h1, current_price, atr, momentum):
-                setups.append(setup)
-        
-        # BB BOUNCE - Works in any market condition (range trading)
-        if setup := self._detect_bb_bounce_long(symbol, df_m15, current_price, atr, momentum):
-            setup.confidence *= 0.9  # Slightly lower confidence for range trades
-            setups.append(setup)
-        
-        if setup := self._detect_bb_bounce_short(symbol, df_m15, current_price, atr, momentum):
-            setup.confidence *= 0.9
-            setups.append(setup)
+        # --- Enrich with ICT confluence data ---
+        pois = self.poi_manager.get_pois(symbol)
+        for setup in setups:
+            self._enrich_ict_confluence(setup, pois, current_price, utc_now)
         
         # Calculate actionability and sort
         for setup in setups:
@@ -776,303 +821,655 @@ class StrategyDetector:
         
         return None
     
-    def _detect_ema_pullback_long(
-        self, symbol: str, df_m5: pd.DataFrame, df_h1: pd.DataFrame,
-        current_price: float, atr: float, trend: TrendFilter, momentum: MomentumConfirm
+    # ==================== ICT SILVER BULLET ====================
+    
+    def _is_silver_bullet_window(self, utc_now: datetime) -> Tuple[bool, str]:
+        """Check if current time is in Silver Bullet kill zone window."""
+        hour = utc_now.hour
+        minute = utc_now.minute
+        
+        # AM window: 15:00-16:00 UTC (10-11 AM EST)
+        if self.sb_am_start <= hour < self.sb_am_end:
+            return True, "AM"
+        # PM window: 19:00-20:00 UTC (2-3 PM EST)
+        if self.sb_pm_start <= hour < self.sb_pm_end:
+            return True, "PM"
+        # Judas Swing: 07:00-07:30 UTC (EU open)
+        if hour == self.judas_start and minute < self.judas_end_minute:
+            return True, "JUDAS"
+        
+        return False, ""
+    
+    def _detect_silver_bullet_long(
+        self, symbol: str, df_m5: pd.DataFrame, df_m15: pd.DataFrame,
+        current_price: float, atr: float, momentum: MomentumConfirm,
+        utc_now: datetime
     ) -> Optional[TradeSetup]:
         """
-        Detect EMA Cloud Pullback (Long).
-        Price pulls back into the EMA34-EMA89 zone in strong uptrend.
+        ICT Silver Bullet LONG + Judas Swing variant.
+        
+        Conditions:
+        1. Current time in AM/PM kill zone OR Judas window (07:00-07:30 UTC)
+        2. M15 swing low was swept (liquidity taken)
+        3. M5 Bullish FVG formed during the window
+        4. Entry at FVG midpoint
+        
+        Judas variant: Asian session low swept at EU open + strong reversal
         """
-        # Condition: Strong trend and price in the "cloud"
-        if not trend.is_strong_trend:
+        in_window, window_type = self._is_silver_bullet_window(utc_now)
+        if not in_window:
             return None
         
-        ema34 = trend.ema34
-        ema89 = trend.ema89
-        
-        # Price should be between EMA34 and EMA89 (in the cloud)
-        if not (ema89 <= current_price <= ema34 * 1.002):  # Allow 0.2% above EMA34
+        if df_m5.empty or len(df_m5) < 10 or df_m15.empty or len(df_m15) < 10:
             return None
         
-        # Check for pinbar or engulfing at the cloud
-        if df_m5.empty or len(df_m5) < 5:
+        # Check if M15 swing low was recently swept
+        m15_lows = df_m15['low'].values
+        swing_lows = self._find_swing_points(m15_lows, 3, "LOW")
+        if len(swing_lows) < 1:
             return None
         
-        opens = df_m5['open'].values
-        closes = df_m5['close'].values
-        highs = df_m5['high'].values
-        lows = df_m5['low'].values
+        last_swing_low = swing_lows[-1]
+        recent_m5_low = min(df_m5['low'].values[-5:])
+        recent_m5_close = float(df_m5['close'].values[-1])
         
-        # Last candle should be bullish with wick
-        if closes[-1] <= opens[-1]:  # Not bullish
-            return None
-        
-        candle_range = highs[-1] - lows[-1]
-        lower_wick = min(opens[-1], closes[-1]) - lows[-1]
-        
-        # Should have lower wick (testing the cloud)
-        if candle_range > 0 and lower_wick / candle_range < 0.3:
-            return None
-        
-        reasons = [
-            f"Pullback into EMA Cloud zone",
-            f"EMA34: {ema34:.6g} | EMA89: {ema89:.6g}",
-            f"Strong trend: EMA gap {trend.ema_gap_pct:.2f}%",
-            "Bullish candle with wick rejection at Cloud"
-        ]
-        
-        confidence = 0.65
-        
-        if momentum.wt_cross_up:
-            confidence += 0.05
-            reasons.append("✅ WaveTrend cross up")
-        
-        if momentum.has_volume_spike:
-            confidence += 0.05
-            reasons.append(f"✅ Volume spike")
-        
-        entry = current_price
-        sl = ema89 - atr * 0.3  # SL below EMA89
-        risk = entry - sl
-        
-        tp1 = entry + risk * 2
-        tp2 = entry + risk * 4
-        tp3 = entry + risk * 6
-        
-        rr = (tp1 - entry) / risk if risk > 0 else 0
-        
-        if rr >= self.min_rr:
-            return TradeSetup(
-                strategy=StrategyType.EMA_PULLBACK,
-                symbol=symbol,
-                direction="LONG",
-                entry_price=entry,
-                stop_loss=sl,
-                take_profit_1=tp1,
-                take_profit_2=tp2,
-                take_profit_3=tp3,
-                confidence=min(1.0, confidence),
-                risk_reward=rr,
-                reasons=reasons,
-                has_wavetrend_cross=momentum.wt_cross_up,
-                has_volume_spike=momentum.has_volume_spike,
-                zone_type="EMA_CLOUD"
-            )
+        # Liquidity sweep: M5 went below M15 swing low then recovered
+        if recent_m5_low < last_swing_low and recent_m5_close > last_swing_low:
+            # === BACKTEST-TUNED: Displacement candle required (v3.1) ===
+            # Without displacement, Silver Bullet had 0% WR in 90-day backtest
+            m5_range = float(df_m5['high'].values[-1]) - float(df_m5['low'].values[-1])
+            m5_body = abs(float(df_m5['close'].values[-1]) - float(df_m5['open'].values[-1]))
+            if m5_range <= 0 or m5_body / m5_range < 0.50 or momentum.volume_ratio < 1.5:
+                return None  # No displacement = no entry
+            
+            # Look for M5 bullish FVG
+            fvg_entry = self.fvg_bridge.find_best_entry_fvg(df_m5, symbol, "LONG", current_price)
+            
+            reasons = [
+                f"🎯 Silver Bullet {window_type} window",
+                f"Swept M15 swing low: {last_swing_low:.6g}",
+                f"Recovered above sweep zone",
+                f"✅ Displacement candle ({m5_body/m5_range*100:.0f}% body, {momentum.volume_ratio:.1f}x vol)"
+            ]
+            
+            confidence = 0.65  # Reduced from 0.72 after backtest
+            is_judas = window_type == "JUDAS"
+            
+            if is_judas:
+                reasons[0] = "🎯 Judas Swing: Asian low swept at EU open"
+                # Judas requires stronger reversal candle
+                m5_opens = df_m5['open'].values
+                body_size = abs(recent_m5_close - float(m5_opens[-1]))
+                candle_range = float(df_m5['high'].values[-1]) - float(df_m5['low'].values[-1])
+                if candle_range > 0 and body_size / candle_range >= 0.65:
+                    confidence += 0.05
+                    reasons.append("✅ Strong reversal candle (Judas)")
+                else:
+                    return None  # Judas requires strong reversal
+            
+            if fvg_entry:
+                entry_price, fvg_top, fvg_bottom = fvg_entry
+                reasons.append(f"✅ M5 FVG entry: {entry_price:.6g}")
+                confidence += 0.08  # FVG quality bonus
+            else:
+                entry_price = current_price
+            
+            if momentum.wt_cross_up:
+                confidence += 0.05
+                reasons.append("✅ WaveTrend cross up")
+            
+            if momentum.has_volume_spike:
+                confidence += 0.05
+                reasons.append(f"✅ Volume spike {momentum.volume_ratio:.1f}x")
+            
+            sl = recent_m5_low - atr * 0.2
+            risk = entry_price - sl
+            if risk <= 0:
+                return None
+            
+            tp1 = entry_price + risk * 2
+            tp2 = entry_price + risk * 4
+            tp3 = entry_price + risk * 6
+            rr = (tp1 - entry_price) / risk
+            
+            if rr >= self.min_rr:
+                return TradeSetup(
+                    strategy=StrategyType.SILVER_BULLET,
+                    symbol=symbol,
+                    direction="LONG",
+                    entry_price=entry_price,
+                    stop_loss=sl,
+                    take_profit_1=tp1,
+                    take_profit_2=tp2,
+                    take_profit_3=tp3,
+                    confidence=min(1.0, confidence),
+                    risk_reward=rr,
+                    reasons=reasons,
+                    has_rsi_divergence=momentum.has_bullish_div,
+                    has_wavetrend_cross=momentum.wt_cross_up,
+                    has_volume_spike=momentum.has_volume_spike,
+                    is_kill_zone=True,
+                    is_judas_swing=is_judas,
+                    is_super_setup=True,  # Silver Bullet LONG = super setup
+                    zone_type="SILVER_BULLET"
+                )
         
         return None
     
-    def _detect_ema_pullback_short(
-        self, symbol: str, df_m5: pd.DataFrame, df_h1: pd.DataFrame,
-        current_price: float, atr: float, trend: TrendFilter, momentum: MomentumConfirm
+    def _detect_silver_bullet_short(
+        self, symbol: str, df_m5: pd.DataFrame, df_m15: pd.DataFrame,
+        current_price: float, atr: float, momentum: MomentumConfirm,
+        utc_now: datetime
     ) -> Optional[TradeSetup]:
-        """Detect EMA Cloud Pullback (Short)."""
-        if not trend.is_strong_trend:
+        """ICT Silver Bullet SHORT: Kill zone + M15 swing high sweep + M5 bearish FVG."""
+        in_window, window_type = self._is_silver_bullet_window(utc_now)
+        if not in_window or window_type == "JUDAS":
+            return None  # Judas is LONG-only
+        
+        if df_m5.empty or len(df_m5) < 10 or df_m15.empty or len(df_m15) < 10:
             return None
         
-        ema34 = trend.ema34
-        ema89 = trend.ema89
-        
-        # Price in cloud for downtrend
-        if not (ema34 * 0.998 <= current_price <= ema89):
+        m15_highs = df_m15['high'].values
+        swing_highs = self._find_swing_points(m15_highs, 3, "HIGH")
+        if len(swing_highs) < 1:
             return None
         
-        if df_m5.empty or len(df_m5) < 5:
-            return None
+        last_swing_high = swing_highs[-1]
+        recent_m5_high = max(df_m5['high'].values[-5:])
+        recent_m5_close = float(df_m5['close'].values[-1])
         
-        opens = df_m5['open'].values
-        closes = df_m5['close'].values
-        highs = df_m5['high'].values
-        lows = df_m5['low'].values
-        
-        if closes[-1] >= opens[-1]:  # Not bearish
-            return None
-        
-        candle_range = highs[-1] - lows[-1]
-        upper_wick = highs[-1] - max(opens[-1], closes[-1])
-        
-        if candle_range > 0 and upper_wick / candle_range < 0.3:
-            return None
-        
-        reasons = [
-            f"Pullback into EMA Cloud zone",
-            f"EMA34: {ema34:.6g} | EMA89: {ema89:.6g}",
-            f"Strong trend: EMA gap {trend.ema_gap_pct:.2f}%",
-            "Bearish candle with wick rejection at Cloud"
-        ]
-        
-        confidence = 0.65
-        
-        if momentum.wt_cross_down:
-            confidence += 0.05
-            reasons.append("✅ WaveTrend cross down")
-        
-        if momentum.has_volume_spike:
-            confidence += 0.05
-            reasons.append(f"✅ Volume spike")
-        
-        entry = current_price
-        sl = ema89 + atr * 0.3
-        risk = sl - entry
-        
-        tp1 = entry - risk * 2
-        tp2 = entry - risk * 4
-        tp3 = entry - risk * 6
-        
-        rr = (entry - tp1) / risk if risk > 0 else 0
-        
-        if rr >= self.min_rr:
-            return TradeSetup(
-                strategy=StrategyType.EMA_PULLBACK,
-                symbol=symbol,
-                direction="SHORT",
-                entry_price=entry,
-                stop_loss=sl,
-                take_profit_1=tp1,
-                take_profit_2=tp2,
-                take_profit_3=tp3,
-                confidence=min(1.0, confidence),
-                risk_reward=rr,
-                reasons=reasons,
-                has_wavetrend_cross=momentum.wt_cross_down,
-                has_volume_spike=momentum.has_volume_spike,
-                zone_type="EMA_CLOUD"
-            )
+        if recent_m5_high > last_swing_high and recent_m5_close < last_swing_high:
+            # === BACKTEST-TUNED: Displacement candle required (v3.1) ===
+            m5_range = float(df_m5['high'].values[-1]) - float(df_m5['low'].values[-1])
+            m5_body = abs(float(df_m5['close'].values[-1]) - float(df_m5['open'].values[-1]))
+            if m5_range <= 0 or m5_body / m5_range < 0.50 or momentum.volume_ratio < 1.5:
+                return None
+            
+            fvg_entry = self.fvg_bridge.find_best_entry_fvg(df_m5, symbol, "SHORT", current_price)
+            
+            reasons = [
+                f"🎯 Silver Bullet {window_type} window",
+                f"Swept M15 swing high: {last_swing_high:.6g}",
+                f"Rejected below sweep zone",
+                f"✅ Displacement candle ({m5_body/m5_range*100:.0f}% body, {momentum.volume_ratio:.1f}x vol)"
+            ]
+            
+            confidence = 0.65  # Reduced from 0.72 after backtest
+            
+            if fvg_entry:
+                entry_price, _, _ = fvg_entry
+                reasons.append(f"✅ M5 FVG entry: {entry_price:.6g}")
+                confidence += 0.08
+            else:
+                entry_price = current_price
+            
+            if momentum.wt_cross_down:
+                confidence += 0.05
+                reasons.append("✅ WaveTrend cross down")
+            
+            if momentum.has_volume_spike:
+                confidence += 0.05
+                reasons.append(f"✅ Volume spike {momentum.volume_ratio:.1f}x")
+            
+            sl = recent_m5_high + atr * 0.2
+            risk = sl - entry_price
+            if risk <= 0:
+                return None
+            
+            tp1 = entry_price - risk * 2
+            tp2 = entry_price - risk * 4
+            tp3 = entry_price - risk * 6
+            rr = (entry_price - tp1) / risk
+            
+            if rr >= self.min_rr:
+                return TradeSetup(
+                    strategy=StrategyType.SILVER_BULLET,
+                    symbol=symbol,
+                    direction="SHORT",
+                    entry_price=entry_price,
+                    stop_loss=sl,
+                    take_profit_1=tp1,
+                    take_profit_2=tp2,
+                    take_profit_3=tp3,
+                    confidence=min(1.0, confidence),
+                    risk_reward=rr,
+                    reasons=reasons,
+                    has_rsi_divergence=momentum.has_bearish_div,
+                    has_wavetrend_cross=momentum.wt_cross_down,
+                    has_volume_spike=momentum.has_volume_spike,
+                    is_kill_zone=True,
+                    zone_type="SILVER_BULLET"
+                )
         
         return None
     
-    def _detect_breaker_retest_long(
+    # ==================== ICT UNICORN MODEL ====================
+    
+    def _detect_unicorn_long(
         self, symbol: str, df_m5: pd.DataFrame, df_h1: pd.DataFrame,
         current_price: float, atr: float, momentum: MomentumConfirm
     ) -> Optional[TradeSetup]:
         """
-        Detect Breaker Block Retest (Long).
-        Price broke above a swing high, then retests it as support.
+        ICT Unicorn Model LONG: H1 bullish breaker + FVG overlap + M5 rejection.
+        
+        1. Find H1 bullish breaker block (bearish candle before strong up move)
+        2. Find H1 bullish FVG overlapping the breaker zone
+        3. M5 price retests this overlap zone + bullish rejection candle (wick >= 30%)
         """
-        if df_h1.empty or len(df_h1) < 30:
+        pois = self.poi_manager.get_pois(symbol)
+        breakers = [p for p in pois if p.poi_type == POIType.BREAKER_H1 and p.direction == "BULLISH"]
+        fvgs = [p for p in pois if p.poi_type == POIType.FVG_H1 and p.direction == "BULLISH"]
+        
+        if not breakers or not fvgs:
             return None
         
-        highs = df_h1['high'].values
-        closes = df_h1['close'].values
-        
-        # Find swing highs that got broken
-        swing_highs = self._find_swing_points(highs, self.swing_lookback, "HIGH")
-        if len(swing_highs) < 2:
-            return None
-        
-        # Check for breakout + retest
-        for i in range(len(swing_highs) - 1, max(0, len(swing_highs) - 4), -1):
-            broken_high = swing_highs[i]
-            
-            # Current price should be just above the broken high (retest)
-            if current_price > broken_high * 0.998 and current_price < broken_high * 1.005:
-                # Check there was a breakout (price went higher before coming back)
-                max_after_break = max(closes[-10:]) if len(closes) >= 10 else closes[-1]
+        # Find breaker+FVG overlap
+        for breaker in breakers:
+            for fvg in fvgs:
+                overlap_low = max(breaker.price_low, fvg.price_low)
+                overlap_high = min(breaker.price_high, fvg.price_high)
                 
-                if max_after_break > broken_high * 1.01:  # Was at least 1% above
-                    reasons = [
-                        f"Retest old high (Breaker Block): {broken_high:.6g}",
-                        "Old high becomes new support",
-                        f"Previous breakout: {max_after_break:.6g}"
-                    ]
-                    
-                    confidence = 0.68
-                    
-                    if momentum.has_volume_spike:
-                        confidence += 0.05
-                        reasons.append("✅ Volume confirmed")
-                    
-                    entry = current_price
-                    sl = broken_high - atr * 0.5
-                    risk = entry - sl
-                    
-                    tp1 = entry + risk * 2
-                    tp2 = entry + risk * 4
-                    tp3 = entry + risk * 6
-                    
-                    rr = (tp1 - entry) / risk if risk > 0 else 0
-                    
-                    if rr >= self.min_rr:
-                        return TradeSetup(
-                            strategy=StrategyType.BREAKER_RETEST,
-                            symbol=symbol,
-                            direction="LONG",
-                            entry_price=entry,
-                            stop_loss=sl,
-                            take_profit_1=tp1,
-                            take_profit_2=tp2,
-                            take_profit_3=tp3,
-                            confidence=min(1.0, confidence),
-                            risk_reward=rr,
-                            reasons=reasons,
-                            has_volume_spike=momentum.has_volume_spike,
-                            zone_type="BREAKER"
-                        )
+                if overlap_low >= overlap_high:
+                    continue
+                
+                # Price must be in or near the overlap zone
+                zone_mid = (overlap_low + overlap_high) / 2
+                if not (overlap_low * 0.998 <= current_price <= overlap_high * 1.002):
+                    continue
+                
+                # Check M5 for bullish rejection candle
+                if df_m5.empty or len(df_m5) < 3:
+                    continue
+                
+                opens = df_m5['open'].values
+                closes = df_m5['close'].values
+                highs = df_m5['high'].values
+                lows = df_m5['low'].values
+                
+                candle_range = highs[-1] - lows[-1]
+                lower_wick = min(opens[-1], closes[-1]) - lows[-1]
+                
+                if candle_range <= 0 or lower_wick / candle_range < 0.30:
+                    continue
+                
+                reasons = [
+                    f"🦄 Unicorn Model: Breaker + FVG confluence",
+                    f"H1 Breaker zone: {breaker.price_low:.6g}-{breaker.price_high:.6g}",
+                    f"H1 FVG overlap: {overlap_low:.6g}-{overlap_high:.6g}",
+                    f"M5 rejection wick: {lower_wick/candle_range*100:.0f}%"
+                ]
+                
+                confidence = 0.73
+                
+                if momentum.wt_cross_up:
+                    confidence += 0.05
+                    reasons.append("✅ WaveTrend cross up")
+                
+                if momentum.has_volume_spike:
+                    confidence += 0.05
+                    reasons.append(f"✅ Volume spike {momentum.volume_ratio:.1f}x")
+                
+                entry = current_price
+                sl = overlap_low - atr * 0.3
+                risk = entry - sl
+                if risk <= 0:
+                    continue
+                
+                tp1 = entry + risk * 2
+                tp2 = entry + risk * 4
+                tp3 = entry + risk * 6
+                rr = (tp1 - entry) / risk
+                
+                if rr >= self.min_rr:
+                    return TradeSetup(
+                        strategy=StrategyType.UNICORN,
+                        symbol=symbol,
+                        direction="LONG",
+                        entry_price=entry,
+                        stop_loss=sl,
+                        take_profit_1=tp1,
+                        take_profit_2=tp2,
+                        take_profit_3=tp3,
+                        confidence=min(1.0, confidence),
+                        risk_reward=rr,
+                        reasons=reasons,
+                        has_rsi_divergence=momentum.has_bullish_div,
+                        has_wavetrend_cross=momentum.wt_cross_up,
+                        has_volume_spike=momentum.has_volume_spike,
+                        has_htf_poi=True,
+                        is_super_setup=True,  # Unicorn LONG = super setup
+                        zone_type="UNICORN"
+                    )
         
         return None
     
-    def _detect_breaker_retest_short(
+    def _detect_unicorn_short(
         self, symbol: str, df_m5: pd.DataFrame, df_h1: pd.DataFrame,
         current_price: float, atr: float, momentum: MomentumConfirm
     ) -> Optional[TradeSetup]:
-        """Detect Breaker Block Retest (Short)."""
-        if df_h1.empty or len(df_h1) < 30:
+        """ICT Unicorn Model SHORT: H1 bearish breaker + FVG overlap + M5 rejection."""
+        pois = self.poi_manager.get_pois(symbol)
+        breakers = [p for p in pois if p.poi_type == POIType.BREAKER_H1 and p.direction == "BEARISH"]
+        fvgs = [p for p in pois if p.poi_type == POIType.FVG_H1 and p.direction == "BEARISH"]
+        
+        if not breakers or not fvgs:
             return None
         
-        lows = df_h1['low'].values
-        closes = df_h1['close'].values
-        
-        swing_lows = self._find_swing_points(lows, self.swing_lookback, "LOW")
-        if len(swing_lows) < 2:
-            return None
-        
-        for i in range(len(swing_lows) - 1, max(0, len(swing_lows) - 4), -1):
-            broken_low = swing_lows[i]
-            
-            if current_price < broken_low * 1.002 and current_price > broken_low * 0.995:
-                min_after_break = min(closes[-10:]) if len(closes) >= 10 else closes[-1]
+        for breaker in breakers:
+            for fvg in fvgs:
+                overlap_low = max(breaker.price_low, fvg.price_low)
+                overlap_high = min(breaker.price_high, fvg.price_high)
                 
-                if min_after_break < broken_low * 0.99:
-                    reasons = [
-                        f"Retest old low (Breaker Block): {broken_low:.6g}",
-                        "Old low becomes new resistance",
-                        f"Previous breakdown: {min_after_break:.6g}"
-                    ]
-                    
-                    confidence = 0.68
-                    
-                    if momentum.has_volume_spike:
-                        confidence += 0.05
-                        reasons.append("✅ Volume confirmed")
-                    
-                    entry = current_price
-                    sl = broken_low + atr * 0.5
-                    risk = sl - entry
-                    
-                    tp1 = entry - risk * 2
-                    tp2 = entry - risk * 4
-                    tp3 = entry - risk * 6
-                    
-                    rr = (entry - tp1) / risk if risk > 0 else 0
-                    
-                    if rr >= self.min_rr:
-                        return TradeSetup(
-                            strategy=StrategyType.BREAKER_RETEST,
-                            symbol=symbol,
-                            direction="SHORT",
-                            entry_price=entry,
-                            stop_loss=sl,
-                            take_profit_1=tp1,
-                            take_profit_2=tp2,
-                            take_profit_3=tp3,
-                            confidence=min(1.0, confidence),
-                            risk_reward=rr,
-                            reasons=reasons,
-                            has_volume_spike=momentum.has_volume_spike,
-                            zone_type="BREAKER"
-                        )
+                if overlap_low >= overlap_high:
+                    continue
+                
+                zone_mid = (overlap_low + overlap_high) / 2
+                if not (overlap_low * 0.998 <= current_price <= overlap_high * 1.002):
+                    continue
+                
+                if df_m5.empty or len(df_m5) < 3:
+                    continue
+                
+                opens = df_m5['open'].values
+                closes = df_m5['close'].values
+                highs = df_m5['high'].values
+                lows = df_m5['low'].values
+                
+                candle_range = highs[-1] - lows[-1]
+                upper_wick = highs[-1] - max(opens[-1], closes[-1])
+                
+                if candle_range <= 0 or upper_wick / candle_range < 0.30:
+                    continue
+                
+                reasons = [
+                    f"🦄 Unicorn Model: Breaker + FVG confluence",
+                    f"H1 Breaker zone: {breaker.price_low:.6g}-{breaker.price_high:.6g}",
+                    f"H1 FVG overlap: {overlap_low:.6g}-{overlap_high:.6g}",
+                    f"M5 rejection wick: {upper_wick/candle_range*100:.0f}%"
+                ]
+                
+                confidence = 0.73
+                
+                if momentum.wt_cross_down:
+                    confidence += 0.05
+                    reasons.append("✅ WaveTrend cross down")
+                
+                if momentum.has_volume_spike:
+                    confidence += 0.05
+                    reasons.append(f"✅ Volume spike {momentum.volume_ratio:.1f}x")
+                
+                entry = current_price
+                sl = overlap_high + atr * 0.3
+                risk = sl - entry
+                if risk <= 0:
+                    continue
+                
+                tp1 = entry - risk * 2
+                tp2 = entry - risk * 4
+                tp3 = entry - risk * 6
+                rr = (entry - tp1) / risk
+                
+                if rr >= self.min_rr:
+                    return TradeSetup(
+                        strategy=StrategyType.UNICORN,
+                        symbol=symbol,
+                        direction="SHORT",
+                        entry_price=entry,
+                        stop_loss=sl,
+                        take_profit_1=tp1,
+                        take_profit_2=tp2,
+                        take_profit_3=tp3,
+                        confidence=min(1.0, confidence),
+                        risk_reward=rr,
+                        reasons=reasons,
+                        has_rsi_divergence=momentum.has_bearish_div,
+                        has_wavetrend_cross=momentum.wt_cross_down,
+                        has_volume_spike=momentum.has_volume_spike,
+                        has_htf_poi=True,
+                        zone_type="UNICORN"
+                    )
         
         return None
+    
+    # ==================== ICT TURTLE SOUP ====================
+    
+    def _detect_turtle_soup_long(
+        self, symbol: str, df_m5: pd.DataFrame, df_h1: pd.DataFrame,
+        current_price: float, atr: float, momentum: MomentumConfirm
+    ) -> Optional[TradeSetup]:
+        """
+        ICT Turtle Soup LONG: HTF key level false breakout.
+        
+        1. Identify PDL or H1 swing low from POI manager
+        2. M5 price sweeps the level by <= 0.3%
+        3. Immediate reversal candle with wick >= 35%
+        4. Close back inside range (above the level)
+        
+        Differs from SFP: requires HTF structural level (not just M5 swing)
+        """
+        pois = self.poi_manager.get_pois(symbol)
+        # Target levels: PDL and H1 swing lows
+        target_pois = [p for p in pois if p.poi_type in [POIType.PDL, POIType.SWING_LOW_H1]]
+        
+        if not target_pois or df_m5.empty or len(df_m5) < 5:
+            return None
+        
+        lows = df_m5['low'].values
+        closes = df_m5['close'].values
+        opens = df_m5['open'].values
+        highs = df_m5['high'].values
+        
+        recent_low = min(lows[-3:])
+        recent_close = closes[-1]
+        
+        for poi in target_pois:
+            level = poi.price_low
+            
+            # Sweep: went below by <= 0.3%
+            sweep_depth = (level - recent_low) / level * 100
+            if recent_low < level and 0 < sweep_depth <= 0.3 and recent_close > level:
+                # === BACKTEST-TUNED GATES (v3.1) ===
+                # Volume gate: require strong volume (>=2.0x avg)
+                if momentum.volume_ratio < 2.0:
+                    continue
+                # Exhaustion gate: require RSI or WT extreme
+                if not (momentum.rsi < 30 or momentum.wt_oversold):
+                    continue
+                
+                # Check for rejection wick
+                candle_range = highs[-1] - lows[-1]
+                lower_wick = min(opens[-1], closes[-1]) - lows[-1]
+                
+                if candle_range <= 0 or lower_wick / candle_range < 0.35:
+                    continue
+                
+                poi_label = "PDL" if poi.poi_type == POIType.PDL else "H1 Swing Low"
+                reasons = [
+                    f"🐢 Turtle Soup: False break of {poi_label}",
+                    f"Level: {level:.6g} (sweep depth: {sweep_depth:.2f}%)",
+                    f"Rejection wick: {lower_wick/candle_range*100:.0f}%",
+                    f"Closed back above level"
+                ]
+                
+                confidence = 0.75  # Higher than SFP due to HTF significance
+                
+                if momentum.wt_cross_up and momentum.wt_oversold:
+                    confidence += 0.08
+                    reasons.append("✅ WaveTrend cross up from oversold")
+                elif momentum.wt_cross_up:
+                    confidence += 0.05
+                    reasons.append("✅ WaveTrend cross up")
+                
+                if momentum.has_volume_spike:
+                    confidence += 0.05
+                    reasons.append(f"✅ Volume spike {momentum.volume_ratio:.1f}x")
+                
+                entry = current_price
+                sl = recent_low - atr * 0.2
+                risk = entry - sl
+                if risk <= 0:
+                    continue
+                
+                tp1 = entry + risk * 2
+                tp2 = entry + risk * 4
+                tp3 = entry + risk * 6
+                rr = (tp1 - entry) / risk
+                
+                if rr >= self.min_rr:
+                    return TradeSetup(
+                        strategy=StrategyType.TURTLE_SOUP,
+                        symbol=symbol,
+                        direction="LONG",
+                        entry_price=entry,
+                        stop_loss=sl,
+                        take_profit_1=tp1,
+                        take_profit_2=tp2,
+                        take_profit_3=tp3,
+                        confidence=min(1.0, confidence),
+                        risk_reward=rr,
+                        reasons=reasons,
+                        has_rsi_divergence=momentum.has_bullish_div,
+                        has_wavetrend_cross=momentum.wt_cross_up,
+                        has_volume_spike=momentum.has_volume_spike,
+                        has_htf_poi=True,
+                        is_super_setup=True,  # Turtle Soup LONG = super setup
+                        zone_type="TURTLE_SOUP"
+                    )
+        
+        return None
+    
+    def _detect_turtle_soup_short(
+        self, symbol: str, df_m5: pd.DataFrame, df_h1: pd.DataFrame,
+        current_price: float, atr: float, momentum: MomentumConfirm
+    ) -> Optional[TradeSetup]:
+        """ICT Turtle Soup SHORT: PDH/H1 swing high false breakout."""
+        pois = self.poi_manager.get_pois(symbol)
+        target_pois = [p for p in pois if p.poi_type in [POIType.PDH, POIType.SWING_HIGH_H1]]
+        
+        if not target_pois or df_m5.empty or len(df_m5) < 5:
+            return None
+        
+        highs = df_m5['high'].values
+        closes = df_m5['close'].values
+        opens = df_m5['open'].values
+        lows = df_m5['low'].values
+        
+        recent_high = max(highs[-3:])
+        recent_close = closes[-1]
+        
+        for poi in target_pois:
+            level = poi.price_high
+            
+            sweep_depth = (recent_high - level) / level * 100
+            if recent_high > level and 0 < sweep_depth <= 0.3 and recent_close < level:
+                # === BACKTEST-TUNED GATES (v3.1) ===
+                # Volume gate: require strong volume (>=2.0x avg)
+                if momentum.volume_ratio < 2.0:
+                    continue
+                # Exhaustion gate: require RSI or WT extreme
+                if not (momentum.rsi > 70 or momentum.wt_overbought):
+                    continue
+                
+                candle_range = highs[-1] - lows[-1]
+                upper_wick = highs[-1] - max(opens[-1], closes[-1])
+                
+                if candle_range <= 0 or upper_wick / candle_range < 0.35:
+                    continue
+                
+                poi_label = "PDH" if poi.poi_type == POIType.PDH else "H1 Swing High"
+                reasons = [
+                    f"🐢 Turtle Soup: False break of {poi_label}",
+                    f"Level: {level:.6g} (sweep depth: {sweep_depth:.2f}%)",
+                    f"Rejection wick: {upper_wick/candle_range*100:.0f}%",
+                    f"Closed back below level"
+                ]
+                
+                confidence = 0.75
+                
+                if momentum.wt_cross_down and momentum.wt_overbought:
+                    confidence += 0.08
+                    reasons.append("✅ WaveTrend cross down from overbought")
+                elif momentum.wt_cross_down:
+                    confidence += 0.05
+                    reasons.append("✅ WaveTrend cross down")
+                
+                if momentum.has_volume_spike:
+                    confidence += 0.05
+                    reasons.append(f"✅ Volume spike {momentum.volume_ratio:.1f}x")
+                
+                entry = current_price
+                sl = recent_high + atr * 0.2
+                risk = sl - entry
+                if risk <= 0:
+                    continue
+                
+                tp1 = entry - risk * 2
+                tp2 = entry - risk * 4
+                tp3 = entry - risk * 6
+                rr = (entry - tp1) / risk
+                
+                if rr >= self.min_rr:
+                    return TradeSetup(
+                        strategy=StrategyType.TURTLE_SOUP,
+                        symbol=symbol,
+                        direction="SHORT",
+                        entry_price=entry,
+                        stop_loss=sl,
+                        take_profit_1=tp1,
+                        take_profit_2=tp2,
+                        take_profit_3=tp3,
+                        confidence=min(1.0, confidence),
+                        risk_reward=rr,
+                        reasons=reasons,
+                        has_rsi_divergence=momentum.has_bearish_div,
+                        has_wavetrend_cross=momentum.wt_cross_down,
+                        has_volume_spike=momentum.has_volume_spike,
+                        has_htf_poi=True,
+                        zone_type="TURTLE_SOUP"
+                    )
+        
+        return None
+    
+    # ==================== ICT CONFLUENCE ENRICHMENT ====================
+    
+    def _enrich_ict_confluence(
+        self, setup: TradeSetup, pois: List[POI],
+        current_price: float, utc_now: datetime
+    ) -> None:
+        """Enrich a TradeSetup with ICT confluence data for scoring bonus."""
+        ict_count = 0
+        
+        # Check kill zone timing
+        in_kz, _ = self._is_silver_bullet_window(utc_now)
+        if in_kz:
+            setup.is_kill_zone = True
+            ict_count += 1
+        
+        # Check HTF POI alignment
+        poi_hits = [p for p in pois if p.is_price_at_level(current_price, 0.3)]
+        if poi_hits and not setup.has_htf_poi:
+            setup.has_htf_poi = True
+            ict_count += 1
+        elif setup.has_htf_poi:
+            ict_count += 1
+        
+        # Check BPR confluence
+        bpr_pois = [p for p in pois if p.poi_type == POIType.BPR_H1]
+        for bpr in bpr_pois:
+            if bpr.is_price_at_level(current_price, 0.3):
+                setup.has_bpr_confluence = True
+                ict_count += 1
+                break
+        
+        # Check IFVG confluence
+        ifvg_pois = [p for p in pois if p.poi_type == POIType.IFVG_H1]
+        for ifvg in ifvg_pois:
+            if ifvg.is_price_at_level(current_price, 0.3):
+                setup.has_ifvg_confluence = True
+                ict_count += 1
+                break
+        
+        setup.ict_conditions_met = ict_count
     
     def _find_swing_points(self, data: np.ndarray, lookback: int, point_type: str) -> List[float]:
         """Find swing high or low points."""
@@ -1100,254 +1497,3 @@ class StrategyDetector:
             ema = (price - ema) * multiplier + ema
         
         return ema
-
-    def _detect_bb_bounce_long(
-        self, symbol: str, df: pd.DataFrame, current_price: float,
-        atr: float, momentum: MomentumConfirm
-    ) -> Optional[TradeSetup]:
-        """
-        Detect BB Bounce LONG - Price touches lower BB and bounces.
-        Best for range/sideways markets.
-        """
-        if df.empty or len(df) < 20:
-            return None
-        
-        closes = df['close'].values
-        lows = df['low'].values
-        
-        # Calculate Bollinger Bands (20, 2)
-        sma20 = np.mean(closes[-20:])
-        std20 = np.std(closes[-20:])
-        bb_lower = sma20 - 2 * std20
-        bb_upper = sma20 + 2 * std20
-        bb_middle = sma20
-        
-        # Check if price touched/pierced lower band recently
-        recent_low = min(lows[-3:])
-        recent_close = closes[-1]
-        
-        # Condition: Low touched BB lower, close above it, RSI oversold or near
-        if recent_low <= bb_lower * 1.002 and recent_close > bb_lower:
-            # Additional: RSI should be < 40 for oversold condition
-            if momentum.rsi < 45 or momentum.wt_oversold:
-                reasons = [
-                    f"📊 Touched BB Lower band",
-                    f"RSI: {momentum.rsi:.0f} (oversold zone)",
-                    f"Close above BB Lower - bounce confirmed"
-                ]
-                
-                confidence = 0.65
-                
-                if momentum.wt_cross_up:
-                    confidence += 0.10
-                    reasons.append("✅ WaveTrend cross up")
-                
-                if momentum.has_volume_spike:
-                    confidence += 0.05
-                    reasons.append(f"✅ Volume spike {momentum.volume_ratio:.1f}x")
-                
-                # Levels: SL below BB lower, TP at BB middle and upper
-                entry = current_price
-                sl = bb_lower - atr * 0.3
-                risk = entry - sl
-                
-                tp1 = bb_middle  # First target at middle band
-                tp2 = bb_upper * 0.98  # Near upper band
-                tp3 = bb_upper
-                
-                rr = (tp1 - entry) / risk if risk > 0 else 0
-                
-                if rr >= 1.5:  # Lower R:R for range trades
-                    return TradeSetup(
-                        strategy=StrategyType.BB_BOUNCE,
-                        symbol=symbol,
-                        direction="LONG",
-                        entry_price=entry,
-                        stop_loss=sl,
-                        take_profit_1=tp1,
-                        take_profit_2=tp2,
-                        take_profit_3=tp3,
-                        confidence=min(1.0, confidence),
-                        risk_reward=rr,
-                        reasons=reasons,
-                        has_wavetrend_cross=momentum.wt_cross_up,
-                        has_volume_spike=momentum.has_volume_spike,
-                        zone_type="BB_LOWER"
-                    )
-        
-        return None
-    
-    def _detect_bb_bounce_short(
-        self, symbol: str, df: pd.DataFrame, current_price: float,
-        atr: float, momentum: MomentumConfirm
-    ) -> Optional[TradeSetup]:
-        """
-        Detect BB Bounce SHORT - Price touches upper BB and reverses.
-        Best for range/sideways markets.
-        """
-        if df.empty or len(df) < 20:
-            return None
-        
-        closes = df['close'].values
-        highs = df['high'].values
-        
-        # Calculate Bollinger Bands (20, 2)
-        sma20 = np.mean(closes[-20:])
-        std20 = np.std(closes[-20:])
-        bb_lower = sma20 - 2 * std20
-        bb_upper = sma20 + 2 * std20
-        bb_middle = sma20
-        
-        # Check if price touched/pierced upper band recently
-        recent_high = max(highs[-3:])
-        recent_close = closes[-1]
-        
-        # Condition: High touched BB upper, close below it, RSI overbought or near
-        if recent_high >= bb_upper * 0.998 and recent_close < bb_upper:
-            # Additional: RSI should be > 60 for overbought condition
-            if momentum.rsi > 55 or momentum.wt_overbought:
-                reasons = [
-                    f"📊 Touched BB Upper band",
-                    f"RSI: {momentum.rsi:.0f} (overbought zone)",
-                    f"Close below BB Upper - reversal confirmed"
-                ]
-                
-                confidence = 0.65
-                
-                if momentum.wt_cross_down:
-                    confidence += 0.10
-                    reasons.append("✅ WaveTrend cross down")
-                
-                if momentum.has_volume_spike:
-                    confidence += 0.05
-                    reasons.append(f"✅ Volume spike {momentum.volume_ratio:.1f}x")
-                
-                # Levels: SL above BB upper, TP at BB middle and lower
-                entry = current_price
-                sl = bb_upper + atr * 0.3
-                risk = sl - entry
-                
-                tp1 = bb_middle  # First target at middle band
-                tp2 = bb_lower * 1.02  # Near lower band
-                tp3 = bb_lower
-                
-                rr = (entry - tp1) / risk if risk > 0 else 0
-                
-                if rr >= 1.5:  # Lower R:R for range trades
-                    return TradeSetup(
-                        strategy=StrategyType.BB_BOUNCE,
-                        symbol=symbol,
-                        direction="SHORT",
-                        entry_price=entry,
-                        stop_loss=sl,
-                        take_profit_1=tp1,
-                        take_profit_2=tp2,
-                        take_profit_3=tp3,
-                        confidence=min(1.0, confidence),
-                        risk_reward=rr,
-                        reasons=reasons,
-                        has_wavetrend_cross=momentum.wt_cross_down,
-                        has_volume_spike=momentum.has_volume_spike,
-                        zone_type="BB_UPPER"
-                    )
-        
-        return None
-
-    def _detect_bearish_continuation(
-        self, symbol: str, df_m5: pd.DataFrame, df_h1: pd.DataFrame,
-        current_price: float, atr: float, momentum: MomentumConfirm
-    ) -> Optional[TradeSetup]:
-        """
-        Detect Bearish Continuation - Simple trend following for bear market.
-        Triggers when price is in downtrend and has small bounce/consolidation.
-        """
-        if df_m5.empty or len(df_m5) < 20 or df_h1.empty:
-            return None
-        
-        closes_m5 = df_m5['close'].values
-        highs_m5 = df_m5['high'].values
-        lows_m5 = df_m5['low'].values
-        closes_h1 = df_h1['close'].values
-        
-        # Calculate EMAs
-        ema20_m5 = self._calc_ema(closes_m5, 20)
-        ema50_m5 = self._calc_ema(closes_m5, 50) if len(closes_m5) >= 50 else ema20_m5
-        ema34_h1 = self._calc_ema(closes_h1, 34)
-        ema89_h1 = self._calc_ema(closes_h1, 89)
-        
-        # Conditions for bearish continuation:
-        # 1. H1 trend is bearish (price < EMA34 < EMA89 OR EMA34 < EMA89)
-        # 2. M5 price bounced slightly (touched or near EMA20)
-        # 3. RSI not oversold (room to fall)
-        # 4. Current candle shows rejection (upper wick)
-        
-        h1_bearish = ema34_h1 < ema89_h1 or current_price < ema34_h1
-        
-        if not h1_bearish:
-            return None
-        
-        # Check if price recently touched EMA20 (bounce point)
-        recent_highs = highs_m5[-5:]
-        ema20_touch = any(h >= ema20_m5 * 0.995 for h in recent_highs)
-        
-        # Price should be near or below EMA20 now
-        near_ema = current_price <= ema20_m5 * 1.02
-        
-        # RSI not oversold (has room to fall)
-        rsi_ok = momentum.rsi > 30 and momentum.rsi < 60
-        
-        # WaveTrend confirmation (bearish)
-        wt_bearish = momentum.wt1 < momentum.wt2 or momentum.wt1 < 0
-        
-        if h1_bearish and (ema20_touch or near_ema) and rsi_ok:
-            reasons = [
-                f"📉 H1 trend bearish (EMA34 < EMA89)",
-                f"📊 Price rejected at EMA20 ({ema20_m5:.6g})",
-                f"RSI: {momentum.rsi:.0f} (room to fall)"
-            ]
-            
-            confidence = 0.55  # Lower confidence for simple setup
-            
-            if wt_bearish:
-                confidence += 0.10
-                reasons.append("✅ WaveTrend bearish")
-            
-            if momentum.wt_cross_down:
-                confidence += 0.10
-                reasons.append("✅ WaveTrend cross down")
-            
-            if momentum.has_volume_spike:
-                confidence += 0.05
-                reasons.append(f"✅ Volume spike {momentum.volume_ratio:.1f}x")
-            
-            # Levels
-            entry = current_price
-            recent_high = max(highs_m5[-5:])
-            sl = max(recent_high + atr * 0.2, entry + atr * 0.5)
-            risk = sl - entry
-            
-            tp1 = entry - risk * 1.5  # 1.5R
-            tp2 = entry - risk * 2.5  # 2.5R
-            tp3 = entry - risk * 4    # 4R
-            
-            rr = (entry - tp1) / risk if risk > 0 else 0
-            
-            if rr >= 1.3:  # Lower R:R requirement
-                return TradeSetup(
-                    strategy=StrategyType.EMA_PULLBACK,  # Reuse existing type
-                    symbol=symbol,
-                    direction="SHORT",
-                    entry_price=entry,
-                    stop_loss=sl,
-                    take_profit_1=tp1,
-                    take_profit_2=tp2,
-                    take_profit_3=tp3,
-                    confidence=min(1.0, confidence),
-                    risk_reward=rr,
-                    reasons=reasons,
-                    has_wavetrend_cross=momentum.wt_cross_down,
-                    has_volume_spike=momentum.has_volume_spike,
-                    zone_type="BEARISH_CONTINUATION"
-                )
-        
-        return None
